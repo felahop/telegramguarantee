@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local configuration and secrets — never commit
+.env
+.env.*
+!.env.example
+chains.yaml
+secrets/
+*.key
+*.age

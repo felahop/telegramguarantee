@@ -1,0 +1,53 @@
+# Services are added as modules land: web (bot + webhooks), worker, watcher, signer.
+name: escrow
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  env_file: .env
+  volumes:
+    - ./chains.yaml:/app/chains.yaml:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: escrow
+      POSTGRES_USER: escrow
+      POSTGRES_PASSWORD: escrow   # change in production (use a Docker secret)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U escrow -d escrow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+volumes:
+  pgdata:
+  redisdata:

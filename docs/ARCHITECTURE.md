@@ -1,7 +1,10 @@
 # Escrow-бот «Гарант» — архитектура (черновик на согласование)
 
-> Статус: **шаг 2 — проект**. Код не пишется до подтверждения («ок»).
-> Всё, что помечено **[дефолт]**, — моё допущение; меняется ответом на вопросы из §17 или через конфиг.
+> Статус: **согласовано** — реализация идёт по плану из §16.
+> Решения заказчика: везде дефолты из §1, кроме двух пунктов —
+> **оплата только в USDT** (никаких TON и других активов, курсов и конвертаций нет);
+> **спор решает один админ** — его решение само авторизует выплаты, второе одобрение не требуется.
+> Порог 2-of-N для *обычных* крупных выплат остаётся настройкой (`LARGE_PAYOUT_APPROVALS`).
 
 ---
 
@@ -352,15 +355,15 @@ stateDiagram-v2
 
 ```python
 class PaymentProvider(Protocol):
-    code: ProviderCode                          # "cryptobot" | "onchain:tron" | ...
+    code: ProviderCode  # "cryptobot" | "onchain:tron" | ...
 
     async def create_payment_request(self, deal: DealSnapshot) -> PaymentInstructions: ...
-    async def check_payment(self, req: PaymentRequestRef) -> PaymentCheck: ...      # фоновая сверка
-    async def payout(self, order: PayoutOrder) -> PayoutResult: ...                 # идемпотентно по order.idempotency_key
-    async def refund(self, order: PayoutOrder) -> PayoutResult: ...                 # = payout(kind=refund)
-    async def get_payout_status(self, order: PayoutOrder) -> PayoutResult: ...      # для «зависших» выплат
+    async def check_payment(self, req: PaymentRequestRef) -> PaymentCheck: ...  # фоновая сверка
+    async def payout(self, order: PayoutOrder) -> PayoutResult: ...  # идемпотентно по order.idempotency_key
+    async def refund(self, order: PayoutOrder) -> PayoutResult: ...  # = payout(kind=refund)
+    async def get_payout_status(self, order: PayoutOrder) -> PayoutResult: ...  # для «зависших» выплат
     async def get_balance(self) -> list[Balance]: ...
-    def validate_destination(self, dest: str) -> str: ...                           # нормализованный адрес / user_id
+    def validate_destination(self, dest: str) -> str: ...  # нормализованный адрес / user_id
 ```
 
 Отличия от ТЗ и почему:
@@ -472,16 +475,16 @@ flowchart LR
 class ChainAdapter(Protocol):
     network: Network
 
-    async def get_head(self) -> ChainHead: ...                                   # latest, finalized
+    async def get_head(self) -> ChainHead: ...  # latest, finalized
     async def scan(self, stream: Stream, cursor: Cursor, upto: Height, *, final: bool) -> ScanPage: ...
-    async def verify_transfer(self, t: ObservedTransfer) -> Verification: ...    # 2-й источник
-    async def lookup_tx(self, tx_hash: str) -> list[ObservedTransfer]: ...       # tx-claim
+    async def verify_transfer(self, t: ObservedTransfer) -> Verification: ...  # 2-й источник
+    async def lookup_tx(self, tx_hash: str) -> list[ObservedTransfer]: ...  # tx-claim
     async def token_balance(self, address: str, at_final: bool = True) -> int: ...
     async def native_balance(self, address: str) -> int: ...
     # исходящие
-    async def prepare_transfer(self, order: PayoutOrder) -> UnsignedTx: ...      # nonce/seqno/ref block/fee
-    async def broadcast(self, raw: bytes) -> str: ...                            # на несколько эндпоинтов
-    async def tx_status(self, tx_hash: str) -> TxStatus: ...                     # pending/final_ok/final_failed/not_found
+    async def prepare_transfer(self, order: PayoutOrder) -> UnsignedTx: ...  # nonce/seqno/ref block/fee
+    async def broadcast(self, raw: bytes) -> str: ...  # на несколько эндпоинтов
+    async def tx_status(self, tx_hash: str) -> TxStatus: ...  # pending/final_ok/final_failed/not_found
     def validate_address(self, address: str) -> str: ...
 ```
 
@@ -630,6 +633,10 @@ seller_receives = amount − seller_fee − network_fee(если платит п
 ## 12. Схема БД (PostgreSQL 16)
 
 Суммы хранятся как `numeric(78,0)` в минимальных единицах: `uint256` помещается, а `NUMERIC` точный. Тип `amount` в коде — `int`.
+
+> Реализация: перечисления хранятся как `VARCHAR + CHECK` (а не `CREATE TYPE`) — новое значение
+> добавляется обычной миграцией без ограничений `ALTER TYPE`. Актуальная схема — `migrations/versions/0001_initial_schema.py`,
+> ниже — эскиз.
 
 ```sql
 -- ── Пользователи ───────────────────────────────────────────────────────────

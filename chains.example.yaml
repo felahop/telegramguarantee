@@ -1,0 +1,93 @@
+# Per-network configuration. Copy to chains.yaml and fill deposit addresses.
+# Contracts below are MAINNET USDT and form the token whitelist: transfers of any other token are ignored.
+# Public RPC endpoints are examples — verify limits (especially eth_getLogs) before relying on them.
+networks:
+  cryptobot:
+    enabled: true
+    title: "CryptoBot · USDT"
+    decimals: 6
+    deposit_mode: invoice
+    network_fee_usdt: "0"
+    min_payout_usdt: "1"        # Crypto Pay transfer limits are roughly $1–25 000 per transfer
+
+  tron:
+    enabled: false
+    title: "USDT · TRC-20"
+    decimals: 6
+    contract: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    deposit_mode: shared
+    deposit_address: ""
+    finality: {kind: solidified}
+    poll_interval_seconds: 5
+    network_fee_usdt: "1.50"
+    min_payout_usdt: "2"
+    rpc:
+      - {name: trongrid, url: "https://api.trongrid.io", api_key_env: TRONGRID_API_KEY}
+    verify_rpc:
+      - {name: publicnode, url: "https://tron-rpc.publicnode.com"}
+
+  bsc:
+    enabled: false
+    title: "USDT · BEP-20"
+    decimals: 18                # Binance-Peg USDT has 18 decimals, NOT 6
+    contract: "0x55d398326f99059fF775485246999027B3197955"
+    deposit_mode: shared
+    deposit_address: ""
+    finality: {kind: finalized_tag, min_confirmations: 15}
+    poll_interval_seconds: 3
+    network_fee_usdt: "0.10"
+    min_payout_usdt: "1"
+    rpc:
+      - {name: publicnode, url: "https://bsc-rpc.publicnode.com", methods: [eth_getLogs], max_block_range: 5000}
+      - {name: 1rpc, url: "https://1rpc.io/bnb", max_block_range: 1000}
+    verify_rpc:
+      - {name: bnbchain, url: "https://bsc-dataseed.bnbchain.org"}
+
+  eth:
+    enabled: false
+    title: "USDT · ERC-20"
+    decimals: 6
+    contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    deposit_mode: shared
+    deposit_address: ""
+    finality: {kind: finalized_tag, min_confirmations: 12}
+    poll_interval_seconds: 12
+    network_fee_usdt: "2.00"
+    min_payout_usdt: "5"
+    rpc:
+      - {name: publicnode, url: "https://ethereum-rpc.publicnode.com", methods: [eth_getLogs], max_block_range: 5000}
+      - {name: 1rpc, url: "https://1rpc.io/eth", max_block_range: 1000}
+    verify_rpc:
+      - {name: llamarpc, url: "https://eth.llamarpc.com"}
+
+  ton:
+    enabled: false
+    title: "USDT · TON"
+    decimals: 6
+    contract: "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"   # USDT jetton master
+    deposit_mode: shared
+    deposit_address: ""
+    finality: {kind: masterchain}
+    poll_interval_seconds: 5
+    network_fee_usdt: "0.10"
+    min_payout_usdt: "1"
+    rpc:
+      - {name: toncenter, url: "https://toncenter.com/api/v3", api_key_env: TONCENTER_API_KEY}
+    verify_rpc:
+      - {name: tonapi, url: "https://tonapi.io", api_key_env: TONAPI_KEY}
+
+  sol:
+    enabled: false
+    title: "USDT · Solana"
+    decimals: 6
+    contract: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"       # USDT SPL mint
+    deposit_mode: shared
+    deposit_address: ""
+    finality: {kind: commitment_finalized}
+    poll_interval_seconds: 5
+    network_fee_usdt: "0.10"
+    min_payout_usdt: "1"
+    rpc:
+      - {name: solana-mainnet, url: "https://api.mainnet-beta.solana.com"}
+    verify_rpc:
+      - {name: publicnode, url: "https://solana-rpc.publicnode.com"}

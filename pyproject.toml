@@ -1,0 +1,72 @@
+[project]
+name = "escrow-bot"
+version = "0.1.0"
+description = "Telegram escrow (guarantor) bot for P2P deals settled in USDT"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "aiogram>=3.15",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+    "redis>=5.2",
+    "httpx>=0.28",
+    "pyyaml>=6.0",
+    "base58>=2.1",
+    "eth-utils>=5.1",
+    "eth-hash[pycryptodome]>=0.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "hypothesis>=6.120",
+    "time-machine>=2.16",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = ["error::RuntimeWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "DTZ", "T20", "SIM", "PL"]
+ignore = [
+    "PLR0913",  # domain operations legitimately take many keyword args
+    "PLR2004",  # magic numbers are fine in tests and money math constants
+    "RUF001", "RUF002", "RUF003",  # Cyrillic in user-facing strings and comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLR0915"]
+"migrations/**" = ["E501", "PLR0915"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["base58.*", "eth_utils.*"]
+ignore_missing_imports = true
