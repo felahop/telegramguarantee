@@ -90,6 +90,8 @@ class Deal(Base):
     accepted_at: Mapped[datetime | None]
     funded_at: Mapped[datetime | None]
     seller_confirmed_at: Mapped[datetime | None]
+    # Start of the buyer-silence clock (reminders, auto-dispute); restarts when a dispute is withdrawn.
+    confirm_wait_started_at: Mapped[datetime | None]
     buyer_confirmed_at: Mapped[datetime | None]
     closed_at: Mapped[datetime | None]
     updated_at: Mapped[datetime] = updated_at_column()

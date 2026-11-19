@@ -115,7 +115,8 @@ class DealResolution(StrEnum):
     MUTUAL_CANCEL = "mutual_cancel"
     REFUND_AFTER_DEADLINE = "refund_after_deadline"
     LATE_PAYMENT = "late_payment"
-    UNDERPAID_EXPIRED = "underpaid_expired"
+    # The payment window closed (or the deal was cancelled) with only part of the money received.
+    PARTIAL_PAYMENT_RETURNED = "partial_payment_returned"
 
 
 class PaymentRequestStatus(StrEnum):

@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", frozen=True)
 
     environment: Literal["dev", "test", "prod"] = "dev"
+    # Accept testnet-only address formats (TON testnet flag) — never enable in production.
+    testnet_mode: bool = False
     log_level: str = "INFO"
     log_json: bool = True
 
@@ -103,6 +105,8 @@ class Settings(BaseSettings):
             raise ValueError("fee_min_usdt must exceed the maximum payment tag (0.0999) in discount mode")
         if not (Decimal(0) < self.deal_min_usdt <= self.new_user_deal_max_usdt <= self.deal_max_usdt):
             raise ValueError("expected 0 < deal_min <= new_user_deal_max <= deal_max")
+        if self.testnet_mode and self.environment == "prod":
+            raise ValueError("testnet_mode must not be enabled in production")
         if self.buyer_reminder_interval >= self.buyer_silence_dispute_after:
             raise ValueError("buyer reminders must come before the automatic dispute")
         return self

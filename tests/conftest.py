@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.config import ChainsConfig, Settings, load_chains
+from tests import addresses
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -15,15 +16,15 @@ ROOT = Path(__file__).resolve().parent.parent
 def chains() -> ChainsConfig:
     """chains.example.yaml with every network enabled (deposit addresses are test values)."""
     base = load_chains(ROOT / "chains.example.yaml")
-    addresses = {
-        "tron": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
-        "bsc": "0x1111111111111111111111111111111111111111",
-        "eth": "0x1111111111111111111111111111111111111111",
-        "ton": "EQDtFpEwcFAEcRe5mLVh2N6C0x-_hJEM7W61_JLnSF74p4q2",
-        "sol": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    deposit = {
+        "tron": addresses.tron(1000),
+        "bsc": addresses.evm(1000),
+        "eth": addresses.evm(1000),
+        "ton": addresses.ton(1000),
+        "sol": addresses.sol(1000),
     }
     networks = {
-        network: cfg.model_copy(update={"enabled": True, "deposit_address": addresses.get(network.value, "")})
+        network: cfg.model_copy(update={"enabled": True, "deposit_address": deposit.get(network.value, "")})
         for network, cfg in base.networks.items()
     }
     return ChainsConfig(networks=networks)
