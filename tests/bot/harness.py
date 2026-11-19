@@ -46,6 +46,7 @@ class RecordingSession(BaseSession):
         super().__init__()
         self.calls: list[TelegramMethod[Any]] = []
         self.sent_ids: dict[int, int] = {}  # index in calls → message_id given to a sent message
+        self.errors: dict[int, Exception] = {}  # chat_id → error raised on sendMessage to that chat
         self._ids = itertools.count(5000)
 
     async def make_request(
@@ -55,6 +56,8 @@ class RecordingSession(BaseSession):
         timeout: int | None = None,  # noqa: ASYNC109
     ) -> TelegramType:
         self.calls.append(method)
+        if isinstance(method, SendMessage) and int(method.chat_id) in self.errors:
+            raise self.errors[int(method.chat_id)]
         if isinstance(method, SendMessage):
             message_id = next(self._ids)
             self.sent_ids[len(self.calls) - 1] = message_id

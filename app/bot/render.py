@@ -147,7 +147,7 @@ def render_deal_card(
     role = deal.party_role(viewer_id)
     if role is not None:
         lines += ["", f"<i>{T.ROLE_YOU[role]}.</i>"]
-    elif viewer_id != deal.creator_id:
+    elif viewer_id != deal.creator_id and deal.status is DealStatus.CREATED:
         lines += ["", f"<i>Вам предлагают стать стороной: {T.ROLE[deal.creator_role.other].lower()}.</i>"]
     if viewer_id == deal.creator_id and deal.pending_counterparty_id:
         candidate = parties.get(deal.pending_counterparty_id)

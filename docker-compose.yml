@@ -1,4 +1,4 @@
-# Services are added as modules land: worker (outbox, payouts, timers), watcher, signer.
+# Services are added as modules land: watcher (chain deposits) and signer (hot keys) come later.
 name: escrow
 
 x-app: &app
@@ -67,6 +67,18 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+
+  worker:
+    <<: *app
+    # Outbox notifications, deal timers (and, as modules land, payment polling and payouts).
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

@@ -243,6 +243,8 @@ class DealService:
         if user_id in (deal.creator_id, deal.buyer_id, deal.seller_id):
             return deal
         user = await get_active_user(self._s, user_id)
+        if user.role in (UserRole.ADMIN, UserRole.ARBITRATOR):
+            return deal
         self._check_invitee(deal, user)
         return deal
 
@@ -419,6 +421,7 @@ class DealService:
             self._bind_counterparty(deal, user_id)
             await self._transition(deal, Action.ACCEPT, actor, roles=roles, target=DealStatus.ACCEPTED)
             effects.notices.append((deal.creator_id, Notice.DEAL_ACCEPTED, {}))
+            self._inline_card_notice(deal, effects)
         await self._finish(deal, effects)
         return deal
 
@@ -434,6 +437,7 @@ class DealService:
             deal.pending_counterparty_id = None
             await self._transition(deal, Action.CONFIRM_COUNTERPARTY, actor, target=DealStatus.ACCEPTED)
             effects.notices.append((pending, Notice.DEAL_ACCEPTED, {}))
+            self._inline_card_notice(deal, effects)
         else:
             fsm.apply(
                 deal.status, Action.CONFIRM_COUNTERPARTY, self._roles(deal, actor), target=DealStatus.CREATED
@@ -1138,6 +1142,7 @@ class DealService:
                 deal_id=deal.id,
                 dedupe_key=f"d{deal.id}:e{deal.event_seq}:{notice.value}:{user_id}",
                 payload={"status": deal.status.value, "code": deal.code, **payload},
+                now=self._clock(),
             )
         await self._s.flush()
 
@@ -1588,6 +1593,13 @@ class DealService:
             .limit(1)
         )
         return bool(found)
+
+    def _inline_card_notice(self, deal: Deal, effects: _Effects) -> None:
+        """The card posted via inline mode in some chat now says the deal was accepted."""
+        if deal.inline_message_id:
+            effects.notices.append(
+                (deal.creator_id, Notice.INLINE_CARD, {"inline_message_id": deal.inline_message_id})
+            )
 
     def _silence_exceeded(self, deal: Deal, now: datetime) -> bool:
         started = deal.confirm_wait_started_at

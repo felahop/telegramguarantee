@@ -7,6 +7,7 @@ produce "status changed but nobody was told" or "told but the change rolled back
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -43,9 +44,24 @@ class Notice(StrEnum):
     DISPUTE_OPENED = "dispute_opened"
     DISPUTE_WITHDRAWN = "dispute_withdrawn"
     DISPUTE_RESOLVED = "dispute_resolved"
+    PAYOUT_ACTION_NEEDED = "payout_action_needed"  # e.g. the recipient never opened @CryptoBot
+    INLINE_CARD = "inline_card"  # edit the inline-mode card the creator posted in a chat
     ADMIN_DISPUTE_OPENED = "admin_dispute_opened"
     ADMIN_DISPUTE_SLA = "admin_dispute_sla"
     ADMIN_PAYOUT_APPROVAL = "admin_payout_approval"
+    ADMIN_PAYOUT_FAILED = "admin_payout_failed"
+    ADMIN_PAYMENT_ANOMALY = "admin_payment_anomaly"
+
+
+ADMIN_NOTICES = frozenset(
+    {
+        Notice.ADMIN_DISPUTE_OPENED,
+        Notice.ADMIN_DISPUTE_SLA,
+        Notice.ADMIN_PAYOUT_APPROVAL,
+        Notice.ADMIN_PAYOUT_FAILED,
+        Notice.ADMIN_PAYMENT_ANOMALY,
+    }
+)
 
 
 async def enqueue(
@@ -54,13 +70,21 @@ async def enqueue(
     user_id: int,
     kind: Notice,
     dedupe_key: str,
+    now: datetime,
     deal_id: int | None = None,
     payload: dict[str, Any] | None = None,
 ) -> None:
+    """``now`` comes from the caller's clock (the sender compares against the same clock)."""
     await session.execute(
         pg_insert(NotificationOutbox)
         .values(
-            user_id=user_id, deal_id=deal_id, kind=kind.value, dedupe_key=dedupe_key, payload=payload or {}
+            user_id=user_id,
+            deal_id=deal_id,
+            kind=kind.value,
+            dedupe_key=dedupe_key,
+            payload=payload or {},
+            next_attempt_at=now,
+            created_at=now,
         )
         .on_conflict_do_nothing(index_elements=[NotificationOutbox.dedupe_key])
     )
