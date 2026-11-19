@@ -10,6 +10,7 @@ from pydantic import SecretStr, ValidationError
 from app.config import ChainsConfig, NetworkConfig, Settings
 from app.domain.enums import Network
 from app.logging import REDACTED, configure_logging, get_logger, redact_secrets
+from tests.conftest import ROOT
 
 
 def make_settings(**kwargs: object) -> Settings:
@@ -86,8 +87,6 @@ class TestRedaction:
 
 
 def test_env_example_is_valid() -> None:
-    from tests.conftest import ROOT
-
     s = Settings(_env_file=ROOT / ".env.example")  # type: ignore[call-arg]
     assert s.payment_ttl.total_seconds() == 1800
     assert s.buyer_silence_dispute_after.total_seconds() == 72 * 3600

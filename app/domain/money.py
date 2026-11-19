@@ -127,3 +127,20 @@ def parse_user_amount(text: str, *, max_places: int = DISPLAY_PLACES) -> Decimal
 def asset_code(asset: Asset | str, network: Network | str) -> str:
     """Ledger asset identifier: the same token on two networks is two different assets."""
     return f"{Asset(asset).value}@{Network(network).value}"
+
+
+_NATIVE_COINS = {
+    Network.BSC: "BNB",
+    Network.ETH: "ETH",
+    Network.TRON: "TRX",
+    Network.TON: "TON",
+    Network.SOL: "SOL",
+}
+
+
+def native_asset_code(network: Network | str) -> str:
+    """Ledger code of the coin that pays gas on a network (network fees are spent in it, not in USDT)."""
+    net = Network(network)
+    if net not in _NATIVE_COINS:
+        raise ValueError(f"{net} has no native gas coin")
+    return f"{_NATIVE_COINS[net]}@{net.value}"
