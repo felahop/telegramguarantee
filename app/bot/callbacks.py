@@ -21,6 +21,8 @@ class DealAct(StrEnum):
     REJECT_CANDIDATE = "cpn"
     REPEAT = "rpt"
     SAVE_TEMPLATE = "tpl"
+    PAY = "pay"
+    CHECK_PAYMENT = "chk"
 
 
 class DealCb(CallbackData, prefix="d"):

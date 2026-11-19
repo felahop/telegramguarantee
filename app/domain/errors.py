@@ -65,3 +65,9 @@ class LedgerError(DomainError):
 
 class AmountError(ValidationFailed):
     code = "invalid_amount"
+
+
+class ProviderUnavailable(ValidationFailed):
+    """The payment provider/network cannot take the request right now."""
+
+    code = "provider_unavailable"

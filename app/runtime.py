@@ -13,6 +13,11 @@ from app.bot.context import BotContext
 from app.bot.storage import RedisKV
 from app.config import Settings, get_chains
 from app.db.session import create_engine, create_sessionmaker
+from app.domain.enums import Network
+from app.providers.cryptobot.client import CryptoPayClient
+from app.providers.cryptobot.gateway import CryptoBotGateway
+from app.services.deals import PaymentGateway
+from app.services.gateways import RoutingGateway
 from app.services.users import ensure_admins
 
 WIZARD_STATE_TTL = 3600
@@ -25,8 +30,11 @@ class Runtime:
     redis: Redis
     ctx: BotContext
     fsm_storage: RedisStorage
+    cryptopay: CryptoPayClient | None = None
 
     async def close(self) -> None:
+        if self.cryptopay is not None:
+            await self.cryptopay.close()
         await self.fsm_storage.close()
         await self.redis.aclose()
         await self.engine.dispose()
@@ -43,6 +51,14 @@ async def build_runtime(settings: Settings) -> Runtime:
         state_ttl=WIZARD_STATE_TTL,
         data_ttl=WIZARD_STATE_TTL,
     )
+    gateways: dict[Network, PaymentGateway] = {}
+    cryptopay = None
+    if settings.cryptobot_api_token.get_secret_value() and Network.CRYPTOBOT in ctx.chains.enabled_networks():
+        cryptopay = CryptoPayClient(settings.cryptobot_api_token, testnet=settings.cryptobot_testnet)
+        gateways[Network.CRYPTOBOT] = CryptoBotGateway(cryptopay, settings, ctx.chains, clock=ctx.clock)
+    ctx.gateway = RoutingGateway(gateways)
     async with sessionmaker() as session, session.begin():
         await ensure_admins(session, settings.admin_ids)
-    return Runtime(settings=settings, engine=engine, redis=redis, ctx=ctx, fsm_storage=fsm_storage)
+    return Runtime(
+        settings=settings, engine=engine, redis=redis, ctx=ctx, fsm_storage=fsm_storage, cryptopay=cryptopay
+    )

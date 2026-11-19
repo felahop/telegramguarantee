@@ -83,6 +83,9 @@ class FakeGateway:
     async def cancel_request(self, session: AsyncSession, request: PaymentRequest) -> None:
         self.cancelled.append(request.id)
 
+    async def sync_request(self, session: AsyncSession, request: PaymentRequest) -> None:
+        return None
+
 
 @dataclass
 class World:

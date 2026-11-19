@@ -1,4 +1,5 @@
-"""Background worker (``python -m app.worker``): outbox notifications and deal timers.
+"""Background worker (``python -m app.worker``): outbox notifications, deal timers, CryptoBot
+invoice polling and CryptoBot payouts.
 
 Several replicas may run: every job claims its rows with ``FOR UPDATE SKIP LOCKED``.
 """
@@ -12,6 +13,7 @@ from app.bot.factory import build_bot
 from app.config import get_settings
 from app.logging import configure_logging, get_logger
 from app.runtime import build_runtime
+from app.worker.cryptobot import run_payouts, run_poller
 from app.worker.outbox import OutboxSender
 from app.worker.timers import run_timers
 
@@ -27,11 +29,16 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
+    jobs = [OutboxSender(runtime.ctx, bot).run(stop), run_timers(runtime.ctx, stop)]
+    if runtime.cryptopay is not None:
+        jobs += [
+            run_poller(runtime.ctx, runtime.cryptopay, stop),
+            run_payouts(runtime.ctx, runtime.cryptopay, stop),
+        ]
+    else:
+        log.warning("cryptobot_disabled", reason="CRYPTOBOT_API_TOKEN is empty or the network is disabled")
     try:
-        await asyncio.gather(
-            OutboxSender(runtime.ctx, bot).run(stop),
-            run_timers(runtime.ctx, stop),
-        )
+        await asyncio.gather(*jobs)
     finally:
         log.info("worker_stopping")
         await bot.session.close()

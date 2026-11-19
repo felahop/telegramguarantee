@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import sqlalchemy as sa
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
@@ -14,8 +15,8 @@ from app.bot.context import BotContext
 from app.bot.drafts import DealDraft
 from app.bot.keyboards import deal_card_kb
 from app.bot.render import PartyInfo, render_deal_card
-from app.db.models import Deal, DealTemplate
-from app.domain.enums import DealSource, PartyRole
+from app.db.models import Deal, DealTemplate, PaymentRequest
+from app.domain.enums import DealSource, DealStatus, PartyRole, PaymentRequestStatus
 from app.domain.money import from_minor
 from app.services.queries import load_users
 
@@ -29,10 +30,24 @@ async def deal_view(
         session, [deal.buyer_id, deal.seller_id, deal.invited_user_id, deal.pending_counterparty_id]
     )
     parties = {uid: PartyInfo.from_user(u) for uid, u in users.items()}
+    payment = None
+    if deal.status is DealStatus.AWAITING_PAYMENT:
+        payment = (
+            await session.execute(
+                sa.select(PaymentRequest).where(
+                    PaymentRequest.deal_id == deal.id, PaymentRequest.status == PaymentRequestStatus.ACTIVE
+                )
+            )
+        ).scalar_one_or_none()
     text = render_deal_card(
-        deal, viewer_id=viewer_id, parties=parties, spec=ctx.spec(deal.network), now=ctx.clock()
+        deal,
+        viewer_id=viewer_id,
+        parties=parties,
+        spec=ctx.spec(deal.network),
+        now=ctx.clock(),
+        payment=payment,
     )
-    return text, deal_card_kb(deal, viewer_id, bot_username=ctx.bot_username)
+    return text, deal_card_kb(deal, viewer_id, bot_username=ctx.bot_username, payment=payment)
 
 
 class Screen:

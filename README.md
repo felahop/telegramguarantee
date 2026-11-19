@@ -4,8 +4,9 @@ Telegram-бот удерживает оплату покупателя и вып
 обеих сторон. Архитектура и решения — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 > Проект в разработке. Готово: схема БД с защитными триггерами, ledger, комиссии, автомат сделок,
-> создание сделки в боте (мастер, `/sell` `/buy` `/deal`, inline-режим, приглашения, шаблоны).
-> Ещё нет: приём оплаты (CryptoBot, сети), отправка уведомлений из outbox, выплаты, админка.
+> создание сделки в боте (мастер, `/sell` `/buy` `/deal`, inline-режим, приглашения, шаблоны),
+> уведомления сторонам, таймеры, **оплата и выплата через CryptoBot**.
+> Ещё нет: кнопки «Я выполнил» / «Получил» и споры в боте, админка, ончейн-сети.
 > Полный README с инструкцией по testnet и списком рисков будет в конце разработки.
 
 ## Запуск для разработки
@@ -20,9 +21,23 @@ uv run alembic upgrade head
 uv run python -m app.bot           # long polling, без вебхука
 ```
 
-Продакшен-режим — вебхук: `docker compose up -d` поднимает `postgres`, `redis`, `migrate` и `web`
-(порт 8080, путь `/tg/webhook`). Нужны `WEBHOOK_BASE_URL` (публичный HTTPS через reverse proxy)
-и `TELEGRAM_WEBHOOK_SECRET`.
+Фоновые задачи (уведомления, таймеры, опрос CryptoBot, выплаты): `uv run python -m app.worker`.
+
+Продакшен-режим — вебхук: `docker compose up -d` поднимает `postgres`, `redis`, `migrate`, `web`
+(порт 8080, пути `/tg/webhook` и `/cryptopay/<secret>`) и `worker`. Нужны `WEBHOOK_BASE_URL`
+(публичный HTTPS через reverse proxy) и `TELEGRAM_WEBHOOK_SECRET`.
+
+### CryptoBot (Crypto Pay)
+
+1. Testnet: откройте @CryptoTestnetBot → Crypto Pay → Create App. Mainnet — то же в @CryptoBot.
+2. Токен приложения → `CRYPTOBOT_API_TOKEN`, `CRYPTOBOT_TESTNET=true|false`.
+3. В настройках приложения **включите Transfers** — без этого выплаты продавцам не пройдут.
+4. Webhooks → URL `https://<ваш домен>/cryptopay/<CRYPTOBOT_WEBHOOK_SECRET_PATH>` (случайная строка).
+   Подпись каждого запроса проверяется; если вебхук потеряется, воркер найдёт оплату опросом.
+5. Получатель выплаты должен хотя бы раз открыть @CryptoBot (@CryptoTestnetBot) — иначе бот
+   попросит его об этом и повторит выплату автоматически.
+6. Проверьте текущую комиссию Crypto Pay за приём оплаты: если она удерживается из счёта, она
+   учитывается как расход сервиса, а минимальная комиссия сервиса должна её покрывать.
 
 ### Настройки бота в @BotFather
 

@@ -18,7 +18,7 @@ from app.bot import texts as T
 from app.bot.callbacks import DealAct, DealCb, MenuAct, MenuCb, TplAct, TplCb, WizAct, WizCb
 from app.bot.drafts import DealDraft, Step
 from app.config import AssetSpec
-from app.db.models import Deal, DealTemplate, SavedAddress
+from app.db.models import Deal, DealTemplate, PaymentRequest, SavedAddress
 from app.domain.enums import TERMINAL_STATUSES, DealStatus, FeePayer, Network, PartyRole
 from app.domain.fees import FeeBreakdown
 from app.domain.money import format_amount
@@ -229,7 +229,9 @@ def fields_kb(draft: DealDraft, steps: Sequence[Step]) -> InlineKeyboardMarkup:
 # ── deal card ────────────────────────────────────────────────────────────────
 
 
-def deal_card_kb(deal: Deal, viewer_id: int, *, bot_username: str) -> InlineKeyboardMarkup:
+def deal_card_kb(
+    deal: Deal, viewer_id: int, *, bot_username: str, payment: PaymentRequest | None = None
+) -> InlineKeyboardMarkup:
     v = deal.version
 
     def cb(action: DealAct) -> DealCb:
@@ -258,8 +260,16 @@ def deal_card_kb(deal: Deal, viewer_id: int, *, bot_username: str) -> InlineKeyb
                 [_btn("✅ Принять условия", cb(DealAct.ACCEPT)), _btn("✖️ Отказаться", cb(DealAct.CANCEL))]
             )
     elif deal.status is DealStatus.ACCEPTED:
+        if viewer_id == deal.buyer_id:
+            rows.append([_btn("💳 Перейти к оплате", cb(DealAct.PAY))])
         row = [_btn("✏️ Изменить", cb(DealAct.EDIT))] if is_creator else []
         rows.append([*row, _btn("✖️ Отменить", cb(DealAct.CANCEL))])
+    elif deal.status is DealStatus.AWAITING_PAYMENT:
+        if viewer_id == deal.buyer_id and payment is not None and payment.pay_url:
+            amount = format_amount(payment.expected_amount, deal.decimals)
+            rows.append([InlineKeyboardButton(text=f"💳 Оплатить {amount} USDT", url=payment.pay_url)])
+            rows.append([_btn("🔄 Я оплатил — проверить", cb(DealAct.CHECK_PAYMENT))])
+        rows.append([_btn("✖️ Отменить", cb(DealAct.CANCEL))])
     if deal.status in TERMINAL_STATUSES and deal.party_role(viewer_id) is not None:
         rows.append(
             [_btn("🔁 Повторить", cb(DealAct.REPEAT)), _btn("📑 В шаблоны", cb(DealAct.SAVE_TEMPLATE))]

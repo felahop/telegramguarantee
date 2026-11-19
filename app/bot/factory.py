@@ -10,7 +10,7 @@ from aiogram.fsm.storage.base import BaseStorage
 
 from app.bot.context import BotContext
 from app.bot.errors import on_error
-from app.bot.handlers import commands, deal_card, fallback, inline, start, wizard
+from app.bot.handlers import commands, deal_card, fallback, inline, payment, start, wizard
 from app.bot.middlewares import DedupeMiddleware, ThrottleMiddleware, UserMiddleware
 from app.config import Settings
 
@@ -36,6 +36,7 @@ def build_dispatcher(
         commands.build_router(),
         inline.build_router(),
         deal_card.build_router(),
+        payment.build_router(),
         wizard.build_router(),
         fallback.build_router(),
     )

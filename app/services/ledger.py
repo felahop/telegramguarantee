@@ -41,6 +41,7 @@ class AccountCode(StrEnum):
     FEE_REVENUE = "fee_revenue"
     NETWORK_FEE_RECOVERED = "network_fee_recovered"  # fixed network fee charged to users (in USDT)
     NETWORK_FEE_EXPENSE = "network_fee_expense"  # gas actually burnt (in the native coin)
+    PROVIDER_FEE_EXPENSE = "provider_fee_expense"  # fee withheld by a payment provider (CryptoBot)
     ADJUSTMENTS = "adjustments"  # manual corrections; admin confirmation + audit
 
 
@@ -53,6 +54,7 @@ ACCOUNT_KINDS: dict[AccountCode, AccountKind] = {
     AccountCode.FEE_REVENUE: AccountKind.REVENUE,
     AccountCode.NETWORK_FEE_RECOVERED: AccountKind.REVENUE,
     AccountCode.NETWORK_FEE_EXPENSE: AccountKind.EXPENSE,
+    AccountCode.PROVIDER_FEE_EXPENSE: AccountKind.EXPENSE,
     AccountCode.ADJUSTMENTS: AccountKind.EQUITY,
 }
 _ALLOW_NEGATIVE = frozenset({AccountCode.ADJUSTMENTS})
@@ -106,6 +108,10 @@ class AccountRef:
     @classmethod
     def network_fee_expense(cls, native_asset: str) -> AccountRef:
         return cls(AccountCode.NETWORK_FEE_EXPENSE, native_asset)
+
+    @classmethod
+    def provider_fee_expense(cls, asset: str) -> AccountRef:
+        return cls(AccountCode.PROVIDER_FEE_EXPENSE, asset)
 
     @classmethod
     def adjustments(cls, asset: str) -> AccountRef:
@@ -365,6 +371,21 @@ def deposit_matched(*, asset: str, wallet: str, deal_id: int, amount: int) -> li
 
 def deposit_unidentified(*, asset: str, wallet: str, amount: int) -> list[Posting]:
     return [debit(AccountRef.custody(asset, wallet), amount), credit(AccountRef.unidentified(asset), amount)]
+
+
+def provider_deposit(
+    *, asset: str, wallet: str, amount: int, provider_fee: int, deal_id: int | None
+) -> list[Posting]:
+    """A deposit through a provider that withholds a fee: the buyer is credited the full amount
+    (escrow, or unidentified when ``deal_id`` is None), custody grows by what actually arrived, and
+    the difference is the service's expense."""
+    if not 0 <= provider_fee < amount:
+        raise LedgerError("provider fee out of range", amount=amount, fee=provider_fee)
+    target = AccountRef.escrow(asset, deal_id) if deal_id is not None else AccountRef.unidentified(asset)
+    postings = [debit(AccountRef.custody(asset, wallet), amount - provider_fee), credit(target, amount)]
+    if provider_fee:
+        postings.append(debit(AccountRef.provider_fee_expense(asset), provider_fee))
+    return postings
 
 
 def assign_unidentified(*, asset: str, deal_id: int, amount: int) -> list[Posting]:

@@ -120,6 +120,11 @@ class PaymentGateway(Protocol):
 
     async def cancel_request(self, session: AsyncSession, request: PaymentRequest) -> None: ...
 
+    async def sync_request(self, session: AsyncSession, request: PaymentRequest) -> None:
+        """Ask the provider for the request's current state and apply a payment we have missed
+        (webhook lost). Called before a payment window is closed and by «Проверить оплату»."""
+        ...
+
 
 @dataclass(frozen=True)
 class Actor:
@@ -571,6 +576,16 @@ class DealService:
         await self._finish(deal, _Effects())
         return deal
 
+    async def refresh_payment(self, user_id: int, deal_id: int) -> Deal:
+        """«Проверить оплату»: re-check with the provider (the webhook may have been lost)."""
+        deal = await self._lock(deal_id)
+        if user_id not in (deal.buyer_id, deal.seller_id):
+            raise Forbidden("only the parties can check the payment")
+        if deal.status is not DealStatus.AWAITING_PAYMENT:
+            return deal
+        await self._sync_payment(deal)
+        return await self._lock(deal_id)
+
     async def fund(self, deal_id: int, *, tx_hash: str | None = None) -> Deal:
         """Called by the payment service after a final deposit made the escrow cover the amount due.
 
@@ -959,6 +974,8 @@ class DealService:
             for party in self._parties(deal):
                 effects.notices.append((party, Notice.DEAL_EXPIRED, {}))
         elif kind is TimerKind.PAYMENT_EXPIRE:
+            if await self._sync_payment(deal):
+                return True  # the payment had arrived after all: the deal is funded, nothing expires
             if await self._has_unconfirmed_transfer(deal):
                 deal.next_action_at = now + PAYMENT_EXPIRY_DEFERRAL
                 return True
@@ -1584,6 +1601,23 @@ class DealService:
             request.tag_release_at = self._clock() + self._settings.tag_cooldown
         if status is PaymentRequestStatus.CANCELLED and self._gateway is not None:
             await self._gateway.cancel_request(self._s, request)
+
+    async def _sync_payment(self, deal: Deal) -> bool:
+        """True when syncing with the provider funded the deal."""
+        if self._gateway is None:
+            return False
+        request = (
+            await self._s.execute(
+                sa.select(PaymentRequest).where(
+                    PaymentRequest.deal_id == deal.id, PaymentRequest.status == PaymentRequestStatus.ACTIVE
+                )
+            )
+        ).scalar_one_or_none()
+        if request is None:
+            return False
+        await self._gateway.sync_request(self._s, request)
+        await self._s.refresh(deal)
+        return deal.status is not DealStatus.AWAITING_PAYMENT
 
     async def _has_unconfirmed_transfer(self, deal: Deal) -> bool:
         found = await self._s.scalar(

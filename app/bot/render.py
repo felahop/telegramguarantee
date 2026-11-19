@@ -10,7 +10,7 @@ from app.bot import texts as T
 from app.bot.drafts import DealDraft
 from app.bot.texts import esc
 from app.config import AssetSpec
-from app.db.models import Deal, User
+from app.db.models import Deal, PaymentRequest, User
 from app.domain.enums import DealStatus, FeePayer, NetworkFeePayer, PartyRole, Provider
 from app.domain.fees import FeeBreakdown
 from app.domain.money import format_amount
@@ -104,7 +104,13 @@ def _terms_block(terms: str) -> str:
 
 
 def render_deal_card(
-    deal: Deal, *, viewer_id: int, parties: dict[int, PartyInfo], spec: AssetSpec, now: datetime
+    deal: Deal,
+    *,
+    viewer_id: int,
+    parties: dict[int, PartyInfo],
+    spec: AssetSpec,
+    now: datetime,
+    payment: PaymentRequest | None = None,
 ) -> str:
     def info(user_id: int | None) -> PartyInfo | None:
         return parties.get(user_id) if user_id is not None else None
@@ -142,6 +148,7 @@ def render_deal_card(
         lines.append(f"Дедлайн: {deal.execution_deadline_at:%d.%m.%Y %H:%M} UTC")
     if viewer_id == deal.seller_id and deal.seller_payout_address:
         lines.append(f"Адрес выплаты: <code>{esc(deal.seller_payout_address)}</code>")
+    lines += _payment_lines(deal, payment, viewer_id)
     lines += ["", _terms_block(deal.terms)]
 
     role = deal.party_role(viewer_id)
@@ -157,6 +164,18 @@ def render_deal_card(
         lines += [f"<i>Условия изменены (версия {deal.version}).</i>"]
     lines += ["", T.SAFETY_FOOTER]
     return "\n".join(lines)
+
+
+def _payment_lines(deal: Deal, payment: PaymentRequest | None, viewer_id: int) -> list[str]:
+    if deal.status is not DealStatus.AWAITING_PAYMENT or payment is None:
+        return []
+    until = f"{payment.expires_at:%H:%M} UTC"
+    if viewer_id != deal.buyer_id:
+        return ["", f"⏳ Ждём оплату покупателя до {until}. Не передавайте товар до статуса «Оплачено»."]
+    lines = ["", f"💳 Оплатите <b>{money(payment.expected_amount, deal.decimals)}</b> до {until}."]
+    if deal.provider is Provider.CRYPTOBOT:
+        lines.append("Оплата проходит в @CryptoBot по кнопке ниже — бот увидит её автоматически.")
+    return lines
 
 
 def render_draft_preview(
