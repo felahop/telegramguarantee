@@ -1,6 +1,10 @@
 """Crypto Pay API (CryptoBot) client.
 
-Docs: https://help.send.tg/en/articles/10279948-crypto-pay-api — testnet bot @CryptoTestnetBot.
+Docs: https://help.cr.bot/en/articles/10279948-crypto-pay-api — testnet bot @CryptoTestnetBot.
+Verified against the docs: auth header, base URLs, webhook signature (HMAC-SHA256 of the raw body,
+key = SHA256(token)), spend_id semantics, ``fee_amount`` is a JSON number, ``paid_asset``/
+``paid_amount`` exist only for fiat invoices, list methods are documented as arrays (an ``items``
+wrapper is accepted too), ``update_id`` is not unique (we dedupe by invoice id).
 Models ignore unknown fields so API additions never break payment processing; amounts are parsed
 as ``Decimal`` from the API's strings and converted to minor units by the caller.
 """
@@ -180,10 +184,14 @@ class CryptoPayClient:
                 continue
             data = response.json() if response.content else {}
             if not data.get("ok"):
-                error = data.get("error") or {}
-                name = error.get("name") or f"HTTP_{response.status_code}"
+                error = data.get("error")
+                if isinstance(error, dict):
+                    name, code = error.get("name"), error.get("code")
+                else:  # the docs show the error as a bare name, e.g. PARAM_SHORT_NAME_REQUIRED
+                    name, code = error, None
+                name = str(name or f"HTTP_{response.status_code}")
                 log.warning("cryptopay_error", method=method, error=name, status=response.status_code)
-                raise CryptoPayError(str(name), error.get("code") or response.status_code, method)
+                raise CryptoPayError(name, code or response.status_code, method)
             return data.get("result")
         raise RuntimeError("unreachable")
 

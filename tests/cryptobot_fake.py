@@ -106,9 +106,9 @@ class FakeCryptoPay:
             raise httpx.ReadTimeout("response lost after the transfer was executed")
         return transfer
 
-    def _getTransfers(self, p: dict[str, Any]) -> dict[str, Any]:
+    def _getTransfers(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         found = self.transfers.get(p.get("spend_id", ""))
-        return {"items": [found] if found else []}
+        return [found] if found else []  # the docs: "returns array of Transfer"
 
     def _getBalance(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"currency_code": "USDT", "available": "1000", "onhold": "0"}]
@@ -125,7 +125,7 @@ class FakeCryptoPay:
             paid_at="2026-03-01T10:05:00.000Z",
         )
         if fee is not None:
-            invoice.update(fee_asset="USDT", fee_amount=fee)
+            invoice.update(fee_asset="USDT", fee_amount=float(fee))  # a JSON number, per the docs
         return invoice
 
     def webhook(self, invoice: dict[str, Any], *, update_id: int = 1) -> tuple[bytes, str]:

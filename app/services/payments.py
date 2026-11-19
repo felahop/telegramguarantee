@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
 import sqlalchemy as sa
@@ -135,7 +136,13 @@ class PaymentService:
                 problems.append("payload_mismatch")
         fee = 0
         if invoice.fee_amount and invoice.fee_asset in (None, Asset.USDT.value):
-            fee = to_minor(invoice.fee_amount, decimals)
+            # A provider fee is our expense, not the buyer's money: rounding it to USDT precision
+            # (instead of failing on an unexpected number of decimals) is the safe choice.
+            quantum = Decimal(1).scaleb(-decimals)
+            fee = to_minor(invoice.fee_amount.quantize(quantum, rounding=ROUND_HALF_UP), decimals)
+            if fee >= amount > 0:
+                problems.append("fee_exceeds_amount")
+                fee = 0
         if request is not None and deal is not None and not problems:
             awaiting = (
                 deal.status is DealStatus.AWAITING_PAYMENT and request.status is PaymentRequestStatus.ACTIVE

@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from aiohttp import web
 from pydantic import ValidationError
 
@@ -18,6 +20,7 @@ from app.services.payments import PaymentService
 
 log = get_logger(__name__)
 PATH_PREFIX = "/cryptopay/"
+STALE_AFTER = timedelta(hours=1)
 
 
 class CryptoPayWebhook:
@@ -37,6 +40,12 @@ class CryptoPayWebhook:
             return web.json_response({"ok": False}, status=400)
         if update.update_type != "invoice_paid":
             return web.json_response({"ok": True})
+        if update.request_date is not None and self._ctx.clock() - update.request_date > STALE_AFTER:
+            # Genuine (signed) but old: Crypto Pay retries for up to 3 days. Processing is idempotent,
+            # so a late delivery is applied; it is logged for monitoring.
+            log.warning(
+                "cryptopay_stale_update", update_id=update.update_id, request_date=str(update.request_date)
+            )
         try:
             async with self._ctx.sessionmaker() as session, session.begin():
                 result = await PaymentService(

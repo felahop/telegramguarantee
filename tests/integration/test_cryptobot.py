@@ -454,3 +454,24 @@ async def test_reads_are_retried_writes_are_not() -> None:
 )
 def test_error_classification(name: str, kind: str) -> None:
     assert CryptoPayError(name, 400).kind == kind
+
+
+async def test_fee_with_excess_precision_is_rounded(cb: CB) -> None:
+    _, invoice_id = await awaiting(cb)
+    invoice = cb.fake.pay(invoice_id)
+    invoice.update(fee_asset="USDT", fee_amount=0.0000004)  # more decimals than USDT has
+    assert await cb.apply(invoice) is ApplyResult.FUNDED
+    assert await cb.balance(AccountRef.provider_fee_expense(USDT)) == 0
+
+
+async def test_error_as_bare_string_is_understood() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"ok": False, "error": "PARAM_SHORT_NAME_REQUIRED"})
+
+    client = CryptoPayClient(SecretStr(TOKEN), testnet=True, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(CryptoPayError) as err:
+            await client.get_me()
+        assert err.value.name == "PARAM_SHORT_NAME_REQUIRED"
+    finally:
+        await client.close()
