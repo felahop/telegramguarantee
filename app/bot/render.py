@@ -111,6 +111,8 @@ def render_deal_card(
     spec: AssetSpec,
     now: datetime,
     payment: PaymentRequest | None = None,
+    refund_deadline: datetime | None = None,
+    needs_refund_address: bool = False,
 ) -> str:
     def info(user_id: int | None) -> PartyInfo | None:
         return parties.get(user_id) if user_id is not None else None
@@ -149,6 +151,9 @@ def render_deal_card(
     if viewer_id == deal.seller_id and deal.seller_payout_address:
         lines.append(f"Адрес выплаты: <code>{esc(deal.seller_payout_address)}</code>")
     lines += _payment_lines(deal, payment, viewer_id)
+    lines += _progress_lines(
+        deal, viewer_id, refund_deadline=refund_deadline, needs_refund_address=needs_refund_address
+    )
     lines += ["", _terms_block(deal.terms)]
 
     role = deal.party_role(viewer_id)
@@ -164,6 +169,73 @@ def render_deal_card(
         lines += [f"<i>Условия изменены (версия {deal.version}).</i>"]
     lines += ["", T.SAFETY_FOOTER]
     return "\n".join(lines)
+
+
+def _when(moment: datetime | None) -> str:
+    return f"{moment:%d.%m %H:%M} UTC" if moment else "—"
+
+
+def _progress_lines(  # noqa: PLR0912 - one hint per status and role
+    deal: Deal, viewer_id: int, *, refund_deadline: datetime | None, needs_refund_address: bool
+) -> list[str]:
+    """What happens now and what the viewer can do (shown under the amounts)."""
+    role = deal.party_role(viewer_id)
+    if role is None:
+        return []
+    buyer = role is PartyRole.BUYER
+    status = deal.status
+    lines: list[str] = []
+    if status is DealStatus.FUNDED:
+        if buyer:
+            lines.append(
+                "🔒 Деньги у гаранта. Продавец выполняет обязательства; без вашего подтверждения "
+                "деньги ему не уйдут."
+            )
+        else:
+            lines.append(
+                f"🔒 Оплата получена. Выполните обязательства до {_when(deal.execution_deadline_at)} "
+                "и нажмите «Я выполнил»."
+            )
+    elif status is DealStatus.SELLER_CONFIRMED:
+        if buyer:
+            lines.append(
+                "📦 Продавец сообщил о выполнении. Проверьте и подтвердите получение — только после "
+                "этого деньги уйдут продавцу. Если что-то не так — откройте спор."
+            )
+        else:
+            lines.append("⏳ Ждём подтверждения покупателя. Если он не ответит 72 ч — откроется спор.")
+    elif status is DealStatus.DISPUTED:
+        lines.append(
+            "⚖️ Идёт спор: деньги заморожены до решения арбитра. Пишите в чат сделки — арбитр "
+            "увидит переписку."
+        )
+    elif status is DealStatus.PAYOUT_PENDING:
+        lines.append("💸 Выплата продавцу отправляется.")
+    elif status is DealStatus.REFUND_PENDING:
+        lines.append("↩️ Деньги возвращаются покупателю.")
+        if buyer and needs_refund_address:
+            lines.append("📮 Укажите адрес для возврата — без него бот не может отправить деньги.")
+    if status in (DealStatus.FUNDED, DealStatus.SELLER_CONFIRMED):
+        mine = deal.cancel_req_buyer_at if buyer else deal.cancel_req_seller_at
+        theirs = deal.cancel_req_seller_at if buyer else deal.cancel_req_buyer_at
+        if mine is not None:
+            lines.append("↩️ Вы предложили отменить сделку — ждём согласия второй стороны.")
+        elif theirs is not None:
+            lines.append(
+                "↩️ Вторая сторона предлагает отменить сделку. Если согласитесь — деньги вернутся покупателю."
+            )
+    if status is DealStatus.FUNDED and deal.refund_requested_at is not None:
+        if buyer:
+            lines.append(
+                f"↩️ Вы запросили возврат. Если продавец не возразит до {_when(refund_deadline)}, "
+                "деньги вернутся вам."
+            )
+        else:
+            lines.append(
+                f"↩️ Покупатель запросил возврат: срок истёк. До {_when(refund_deadline)} согласитесь "
+                "или возразите — иначе деньги вернутся покупателю."
+            )
+    return ["", *lines] if lines else []
 
 
 def _payment_lines(deal: Deal, payment: PaymentRequest | None, viewer_id: int) -> list[str]:

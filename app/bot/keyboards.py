@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -230,7 +231,14 @@ def fields_kb(draft: DealDraft, steps: Sequence[Step]) -> InlineKeyboardMarkup:
 
 
 def deal_card_kb(
-    deal: Deal, viewer_id: int, *, bot_username: str, payment: PaymentRequest | None = None
+    deal: Deal,
+    viewer_id: int,
+    *,
+    bot_username: str,
+    payment: PaymentRequest | None = None,
+    now: datetime | None = None,
+    can_withdraw_dispute: bool = False,
+    needs_refund_address: bool = False,
 ) -> InlineKeyboardMarkup:
     v = deal.version
 
@@ -270,6 +278,13 @@ def deal_card_kb(
             rows.append([InlineKeyboardButton(text=f"💳 Оплатить {amount} USDT", url=payment.pay_url)])
             rows.append([_btn("🔄 Я оплатил — проверить", cb(DealAct.CHECK_PAYMENT))])
         rows.append([_btn("✖️ Отменить", cb(DealAct.CANCEL))])
+    rows += execution_rows(
+        deal,
+        viewer_id,
+        now=now or datetime.now(UTC),
+        can_withdraw_dispute=can_withdraw_dispute,
+        needs_refund_address=needs_refund_address,
+    )
     if deal.status in TERMINAL_STATUSES and deal.party_role(viewer_id) is not None:
         rows.append(
             [_btn("🔁 Повторить", cb(DealAct.REPEAT)), _btn("📑 В шаблоны", cb(DealAct.SAVE_TEMPLATE))]
@@ -330,3 +345,112 @@ def network_title(specs: Sequence[AssetSpec], network: Network) -> str:
         if spec.network is network:
             return spec.title
     return T.NETWORK_SHORT[network]
+
+
+# ── after funding ────────────────────────────────────────────────────────────
+
+CHAT_STATUSES = frozenset(
+    {
+        DealStatus.ACCEPTED,
+        DealStatus.AWAITING_PAYMENT,
+        DealStatus.FUNDED,
+        DealStatus.SELLER_CONFIRMED,
+        DealStatus.DISPUTED,
+    }
+)
+
+
+def execution_rows(  # noqa: PLR0912 - one row per status, role and flag
+    deal: Deal,
+    viewer_id: int,
+    *,
+    now: datetime,
+    can_withdraw_dispute: bool = False,
+    needs_refund_address: bool = False,
+) -> list[list[InlineKeyboardButton]]:
+    """Buttons of a party once the deal is paid (only the ones valid right now)."""
+    role = deal.party_role(viewer_id)
+    if role is None:
+        return []
+
+    def cb(action: DealAct) -> DealCb:
+        return DealCb(a=action, id=deal.id, v=deal.version)
+
+    buyer = role is PartyRole.BUYER
+    rows: list[list[InlineKeyboardButton]] = []
+    if deal.status is DealStatus.FUNDED:
+        if not buyer:
+            if deal.refund_requested_at is not None:
+                rows.append(
+                    [
+                        _btn("↩️ Согласен на возврат", cb(DealAct.AGREE_REFUND)),
+                        _btn("⚖️ Возразить", cb(DealAct.OBJECT_REFUND)),
+                    ]
+                )
+                rows.append([_btn("✅ Я выполнил (откроет спор)", cb(DealAct.SELLER_DONE))])
+            else:
+                rows.append([_btn("✅ Я выполнил обязательства", cb(DealAct.SELLER_DONE))])
+        elif (
+            deal.refund_requested_at is None
+            and deal.execution_deadline_at is not None
+            and now >= deal.execution_deadline_at
+        ):
+            rows.append([_btn("↩️ Запросить возврат", cb(DealAct.REQ_REFUND))])
+    if deal.status is DealStatus.SELLER_CONFIRMED and buyer:
+        rows.append([_btn("📦 Получил, всё верно", cb(DealAct.BUYER_GOT))])
+    if deal.status in (DealStatus.FUNDED, DealStatus.SELLER_CONFIRMED):
+        mine = deal.cancel_req_buyer_at if buyer else deal.cancel_req_seller_at
+        theirs = deal.cancel_req_seller_at if buyer else deal.cancel_req_buyer_at
+        if mine is not None:
+            rows.append([_btn("Отозвать предложение отмены", cb(DealAct.REVOKE_CANCEL))])
+        elif theirs is not None:
+            rows.append([_btn("✅ Согласиться на отмену", cb(DealAct.REQ_CANCEL))])
+        else:
+            rows.append([_btn("↩️ Предложить отмену", cb(DealAct.REQ_CANCEL))])
+        rows.append([_btn("⚖️ Открыть спор", cb(DealAct.DISPUTE))])
+    if deal.status is DealStatus.DISPUTED and can_withdraw_dispute:
+        rows.append([_btn("↩️ Отозвать спор", cb(DealAct.WITHDRAW_DISPUTE))])
+    if deal.status is DealStatus.REFUND_PENDING and buyer and needs_refund_address:
+        rows.append([_btn("📮 Указать адрес возврата", cb(DealAct.REFUND_ADDRESS))])
+    if deal.status in CHAT_STATUSES and deal.counterparty_of(viewer_id) is not None:
+        rows.append([_btn("💬 Написать второй стороне", cb(DealAct.CHAT))])
+    return rows
+
+
+def confirm_kb(deal: Deal, action: DealAct, token: int, yes: str) -> InlineKeyboardMarkup:
+    return _markup(
+        [
+            [_btn(yes, DealCb(a=action, id=deal.id, v=token))],
+            [_btn("⬅️ Нет, вернуться", DealCb(a=DealAct.VIEW, id=deal.id, v=deal.version))],
+        ]
+    )
+
+
+def dispute_reason_kb(deal: Deal) -> InlineKeyboardMarkup:
+    return _markup(
+        [
+            [_btn("Открыть без описания", DealCb(a=DealAct.DISPUTE_NO_REASON, id=deal.id, v=deal.version))],
+            [_btn("⬅️ Отмена", DealCb(a=DealAct.VIEW, id=deal.id, v=deal.version))],
+        ]
+    )
+
+
+def refund_address_kb(deal: Deal, saved: Sequence[SavedAddress]) -> InlineKeyboardMarkup:
+    rows = [[_btn(f"📌 {_short(a.address)}", WizCb(a=WizAct.ADDRESS, val=str(a.id)))] for a in saved]
+    rows.append([_btn("⬅️ Отмена", DealCb(a=DealAct.VIEW, id=deal.id, v=deal.version))])
+    return _markup(rows)
+
+
+def chat_relay_kb(deal: Deal) -> InlineKeyboardMarkup:
+    return _markup(
+        [
+            [
+                _btn("💬 Ответить", DealCb(a=DealAct.CHAT, id=deal.id, v=deal.version)),
+                _btn("🛡 Открыть сделку", DealCb(a=DealAct.VIEW, id=deal.id, v=deal.version)),
+            ]
+        ]
+    )
+
+
+def chat_close_kb(deal: Deal) -> InlineKeyboardMarkup:
+    return _markup([[_btn("✖️ Завершить чат", DealCb(a=DealAct.CHAT_CLOSE, id=deal.id, v=deal.version))]])

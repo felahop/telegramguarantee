@@ -15,8 +15,18 @@ from app.bot.context import BotContext
 from app.bot.drafts import DealDraft
 from app.bot.keyboards import deal_card_kb
 from app.bot.render import PartyInfo, render_deal_card
-from app.db.models import Deal, DealTemplate, PaymentRequest
-from app.domain.enums import DealSource, DealStatus, PartyRole, PaymentRequestStatus
+from app.db.models import Deal, DealTemplate, Dispute, PaymentRequest, Payout
+from app.domain.enums import (
+    BUYER_BOUND_PAYOUTS,
+    OPEN_DISPUTE_STATUSES,
+    DealSource,
+    DealStatus,
+    DisputeReason,
+    PartyRole,
+    PaymentRequestStatus,
+    PayoutStatus,
+    Provider,
+)
 from app.domain.money import from_minor
 from app.services.queries import load_users
 
@@ -39,15 +49,55 @@ async def deal_view(
                 )
             )
         ).scalar_one_or_none()
+    refund_deadline = (
+        deal.refund_requested_at + ctx.settings.refund_objection_window if deal.refund_requested_at else None
+    )
+    needs_refund_address = False
+    if deal.status is DealStatus.REFUND_PENDING and deal.provider is Provider.ONCHAIN:
+        needs_refund_address = bool(
+            await session.scalar(
+                sa.select(sa.func.count())
+                .select_from(Payout)
+                .where(
+                    Payout.deal_id == deal.id,
+                    Payout.status == PayoutStatus.AWAITING_ADDRESS,
+                    Payout.kind.in_(list(BUYER_BOUND_PAYOUTS)),
+                )
+            )
+        )
+    can_withdraw = False
+    if deal.status is DealStatus.DISPUTED:
+        dispute = (
+            await session.execute(
+                sa.select(Dispute).where(
+                    Dispute.deal_id == deal.id, Dispute.status.in_(list(OPEN_DISPUTE_STATUSES))
+                )
+            )
+        ).scalar_one_or_none()
+        if dispute is not None and dispute.reason is not DisputeReason.REFUND_OBJECTION:
+            opener = dispute.opened_by if dispute.reason is DisputeReason.USER else deal.buyer_id
+            can_withdraw = opener == viewer_id
+    now = ctx.clock()
     text = render_deal_card(
         deal,
         viewer_id=viewer_id,
         parties=parties,
         spec=ctx.spec(deal.network),
-        now=ctx.clock(),
+        now=now,
         payment=payment,
+        refund_deadline=refund_deadline,
+        needs_refund_address=needs_refund_address,
     )
-    return text, deal_card_kb(deal, viewer_id, bot_username=ctx.bot_username, payment=payment)
+    markup = deal_card_kb(
+        deal,
+        viewer_id,
+        bot_username=ctx.bot_username,
+        payment=payment,
+        now=now,
+        can_withdraw_dispute=can_withdraw,
+        needs_refund_address=needs_refund_address,
+    )
+    return text, markup
 
 
 class Screen:

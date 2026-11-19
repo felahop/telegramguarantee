@@ -2,42 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
-import pytest
 import sqlalchemy as sa
-from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.callbacks import DealAct, DealCb
 from app.bot.context import BotContext
-from app.domain.enums import DealStatus, Network
-from app.providers.cryptobot.client import CryptoPayClient
-from app.providers.cryptobot.gateway import CryptoBotGateway
-from app.services.gateways import RoutingGateway
+from app.domain.enums import DealStatus
 from tests.bot.conftest import ALICE, BOB
 from tests.bot.harness import BotHarness
 from tests.bot.test_bot_flows import deals, press
 from tests.bot.test_notifications import drain
-from tests.cryptobot_fake import TOKEN, FakeCryptoPay
-
-
-@pytest.fixture
-def fake() -> FakeCryptoPay:
-    return FakeCryptoPay()
-
-
-@pytest.fixture
-async def paying_bot(ctx: BotContext, fake: FakeCryptoPay) -> AsyncIterator[BotHarness]:
-    client = CryptoPayClient(SecretStr(TOKEN), testnet=True, transport=fake.transport())
-    ctx.settings = ctx.settings.model_copy(update={"cryptobot_api_token": SecretStr(TOKEN)})
-    ctx.gateway = RoutingGateway(
-        {
-            Network.CRYPTOBOT: CryptoBotGateway(client, ctx.settings, ctx.chains, clock=ctx.clock),
-        }
-    )
-    yield BotHarness.create(ctx)
-    await client.close()
+from tests.cryptobot_fake import FakeCryptoPay
 
 
 async def test_buyer_pays_from_the_card(

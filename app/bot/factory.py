@@ -10,7 +10,7 @@ from aiogram.fsm.storage.base import BaseStorage
 
 from app.bot.context import BotContext
 from app.bot.errors import on_error
-from app.bot.handlers import commands, deal_card, fallback, inline, payment, start, wizard
+from app.bot.handlers import chat, commands, deal_card, execution, fallback, inline, payment, start, wizard
 from app.bot.middlewares import DedupeMiddleware, ThrottleMiddleware, UserMiddleware
 from app.config import Settings
 
@@ -35,6 +35,8 @@ def build_dispatcher(
         start.build_router(),
         commands.build_router(),
         inline.build_router(),
+        execution.build_router(),  # before deal_card: «Отмена» (VIEW) inside its prompts clears the state
+        chat.build_router(),
         deal_card.build_router(),
         payment.build_router(),
         wizard.build_router(),

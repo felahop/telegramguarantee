@@ -23,6 +23,23 @@ class DealAct(StrEnum):
     SAVE_TEMPLATE = "tpl"
     PAY = "pay"
     CHECK_PAYMENT = "chk"
+    # after funding
+    SELLER_DONE = "sd"
+    BUYER_GOT = "bg"  # shows the irreversible-confirmation screen
+    BUYER_GOT_OK = "bgok"  # v = one-time confirmation token
+    REQ_CANCEL = "rc"
+    REQ_CANCEL_OK = "rcok"
+    REVOKE_CANCEL = "rv"
+    REQ_REFUND = "rr"
+    AGREE_REFUND = "ar"
+    AGREE_REFUND_OK = "arok"
+    OBJECT_REFUND = "or"
+    DISPUTE = "dp"
+    DISPUTE_NO_REASON = "dpn"
+    WITHDRAW_DISPUTE = "wd"
+    REFUND_ADDRESS = "ra"
+    CHAT = "ch"
+    CHAT_CLOSE = "chx"
 
 
 class DealCb(CallbackData, prefix="d"):
