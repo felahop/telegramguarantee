@@ -81,8 +81,9 @@ class Settings(BaseSettings):
 
     # Payout controls
     manual_approval_threshold_usdt: Decimal = Decimal("2000")
-    large_payout_approvals: int = Field(2, ge=1)
-    # Product decision: a dispute is decided by one admin; the decision itself authorizes payouts.
+    # Product decision: one admin confirmation in every case — a large payout needs one approval,
+    # and a dispute decision by one admin authorizes its payouts by itself.
+    large_payout_approvals: int = Field(1, ge=1)
     dispute_payout_requires_approval: bool = False
     hot_wallet_limit_usdt: Decimal = Decimal("10000")
 

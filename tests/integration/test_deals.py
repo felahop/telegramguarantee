@@ -668,13 +668,13 @@ async def test_admin_cannot_decide_own_deal(world: World) -> None:
         await world.svc.resolve_dispute(SELLER, deal.id, decision=DisputeDecision.SELLER, comment="мне")
 
 
-async def test_large_regular_payout_needs_two_approvals(world: World) -> None:
+async def test_large_regular_payout_needs_one_approval(world: World) -> None:
     await world.session.execute(sa.update(User).values(deals_completed=5))
     deal = await world.funded_deal(amount="2500")
     await world.svc.seller_confirm(SELLER, deal.id)
     await world.svc.buyer_confirm(BUYER, deal.id)
     [payout] = await world.payouts(deal)
-    assert (payout.status, payout.approvals_required) == (PayoutStatus.AWAITING_APPROVAL, 2)
+    assert (payout.status, payout.approvals_required) == (PayoutStatus.AWAITING_APPROVAL, 1)
     assert "admin_payout_approval" in await world.notices(ADMIN)
 
 

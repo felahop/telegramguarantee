@@ -41,7 +41,7 @@ class AccountCode(StrEnum):
     FEE_REVENUE = "fee_revenue"
     NETWORK_FEE_RECOVERED = "network_fee_recovered"  # fixed network fee charged to users (in USDT)
     NETWORK_FEE_EXPENSE = "network_fee_expense"  # gas actually burnt (in the native coin)
-    ADJUSTMENTS = "adjustments"  # manual corrections; two admins + audit
+    ADJUSTMENTS = "adjustments"  # manual corrections; admin confirmation + audit
 
 
 ACCOUNT_KINDS: dict[AccountCode, AccountKind] = {

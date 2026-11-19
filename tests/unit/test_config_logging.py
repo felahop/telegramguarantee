@@ -91,3 +91,5 @@ def test_env_example_is_valid() -> None:
     assert s.payment_ttl.total_seconds() == 1800
     assert s.buyer_silence_dispute_after.total_seconds() == 72 * 3600
     assert s.dispute_payout_requires_approval is False
+    assert s.large_payout_approvals == 1  # one admin confirmation in every case
+    assert Settings(_env_file=None).large_payout_approvals == 1  # type: ignore[call-arg]
