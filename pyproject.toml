@@ -60,6 +60,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "PLR0915"]
 "migrations/**" = ["E501", "PLR0915"]
+# aiogram injects dependencies into handlers by parameter name; dispatch handlers branch by button.
+"app/bot/handlers/**" = ["PLR0917", "PLR0911", "PLR0912", "PLR0915"]
 
 [tool.mypy]
 python_version = "3.12"

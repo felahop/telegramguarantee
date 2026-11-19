@@ -1,4 +1,4 @@
-# Services are added as modules land: web (bot + webhooks), worker, watcher, signer.
+# Services are added as modules land: worker (outbox, payouts, timers), watcher, signer.
 name: escrow
 
 x-app: &app
@@ -47,6 +47,26 @@ services:
     <<: *app
     command: ["alembic", "upgrade", "head"]
     restart: "no"
+
+  web:
+    <<: *app
+    # Telegram webhook (and, later, the CryptoBot webhook). Put it behind an HTTPS reverse proxy:
+    # WEBHOOK_BASE_URL must be the public https:// address that forwards to this port.
+    command: ["python", "-m", "app.web"]
+    ports:
+      - "8080:8080"
+    depends_on:  # replaces the anchor's list, so repeat the databases
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:

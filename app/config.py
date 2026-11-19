@@ -186,9 +186,11 @@ class ChainsConfig(BaseModel):
     def enabled_networks(self) -> list[Network]:
         return [n for n, cfg in self.networks.items() if cfg.enabled]
 
-    def spec(self, network: Network) -> AssetSpec:
+    def spec(self, network: Network, *, include_disabled: bool = False) -> AssetSpec:
+        """Money parameters of a network. ``include_disabled`` lets old deals still render after a
+        network was switched off in the config."""
         cfg = self.networks.get(network)
-        if cfg is None or not cfg.enabled:
+        if cfg is None or not (cfg.enabled or include_disabled):
             raise KeyError(f"network {network} is not enabled")
         return AssetSpec(
             network=network,

@@ -213,6 +213,15 @@ class DealService:
         spec = self._chains.spec(network)
         return calculate_fees(spec.minor(amount), fee_payer, FeePolicy.from_settings(self._settings, spec))
 
+    async def check_amount(self, user_id: int, network: Network, amount: Decimal) -> int:
+        """Early validation for the wizard: limits for this user (the service re-checks on create)."""
+        user = await get_active_user(self._s, user_id)
+        return self._validate_amount(self._spec(network), amount, user)
+
+    async def check_payout_address(self, network: Network, address: str) -> str:
+        """Early validation for the wizard: format, checksum, not our own address, not blacklisted."""
+        return await self._validate_payout_address(network, address)
+
     async def get_for_user(self, user_id: int, deal_id: int) -> Deal:
         deal = await self._get(deal_id)
         if user_id in (
@@ -227,6 +236,15 @@ class DealService:
         if user is not None and user.role in (UserRole.ADMIN, UserRole.ARBITRATOR):
             return deal
         raise NotFound("deal not found", deal_id=deal_id)  # do not reveal other people's deals
+
+    async def get_for_invitee(self, user_id: int, deal_id: int) -> Deal:
+        """A deal as seen by a party *or* by the user it is offered to (invite checks apply)."""
+        deal = await self._get(deal_id)
+        if user_id in (deal.creator_id, deal.buyer_id, deal.seller_id):
+            return deal
+        user = await get_active_user(self._s, user_id)
+        self._check_invitee(deal, user)
+        return deal
 
     async def open_invite(self, user_id: int, token: str) -> Deal:
         """Resolve a deep-link invite token for a prospective counterparty (no state change)."""

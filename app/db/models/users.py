@@ -30,6 +30,8 @@ class User(Base):
     totp_secret_enc: Mapped[bytes | None] = mapped_column(sa.LargeBinary)
     created_at: Mapped[datetime] = created_at_column()
     last_seen_at: Mapped[datetime] = created_at_column()
+    # Set on /start: only users who started the bot can receive messages from it.
+    started_at: Mapped[datetime | None]
 
     __table_args__ = (sa.Index("ix_users_username_lower", sa.text("lower(username)")),)
 

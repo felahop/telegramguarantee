@@ -77,6 +77,8 @@ class Deal(Base):
 
     seller_payout_address: Mapped[str | None]
     buyer_refund_address: Mapped[str | None]
+    # Inline card posted via inline mode (updated when the deal is accepted).
+    inline_message_id: Mapped[str | None]
 
     next_action_at: Mapped[datetime | None]
     next_action_kind: Mapped[TimerKind | None] = mapped_column(str_enum(TimerKind, "next_action_kind"))
