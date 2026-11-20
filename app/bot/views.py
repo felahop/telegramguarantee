@@ -27,7 +27,8 @@ from app.domain.enums import (
     PayoutStatus,
     Provider,
 )
-from app.domain.money import from_minor
+from app.domain.money import asset_code, from_minor
+from app.services.ledger import AccountRef, Ledger
 from app.services.queries import load_users
 
 Markup = InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove
@@ -41,7 +42,11 @@ async def deal_view(
     )
     parties = {uid: PartyInfo.from_user(u) for uid, u in users.items()}
     payment = None
+    received = 0
     if deal.status is DealStatus.AWAITING_PAYMENT:
+        received = await Ledger(session).normal_balance(
+            AccountRef.escrow(asset_code(deal.asset, deal.network), deal.id)
+        )
         payment = (
             await session.execute(
                 sa.select(PaymentRequest).where(
@@ -87,6 +92,7 @@ async def deal_view(
         payment=payment,
         refund_deadline=refund_deadline,
         needs_refund_address=needs_refund_address,
+        received=received,
     )
     markup = deal_card_kb(
         deal,
@@ -96,6 +102,7 @@ async def deal_view(
         now=now,
         can_withdraw_dispute=can_withdraw,
         needs_refund_address=needs_refund_address,
+        received=received,
     )
     return text, markup
 

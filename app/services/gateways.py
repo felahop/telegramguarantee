@@ -1,4 +1,4 @@
-"""Routes payment requests to the provider of the deal (CryptoBot now, on-chain networks later)."""
+"""Routes payment requests to the provider of the deal: CryptoBot or the on-chain gateway."""
 
 from __future__ import annotations
 

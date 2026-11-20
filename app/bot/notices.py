@@ -50,6 +50,20 @@ def _who(users: dict[int, User], user_id: object) -> str:
     return "пользователь"
 
 
+def _partial(deal: Deal, uid: int, p: dict[str, Any], _: dict[int, User]) -> str:
+    got, missing = _amount(deal, p, "received"), _amount(deal, p, "missing")
+    if _role(deal, uid) is PartyRole.SELLER:
+        return (
+            f"🧩 <b>Пришла часть оплаты: {got}</b>, не хватает {missing}. Покупатель может доплатить. "
+            "Если вас устраивает полученная сумма — нажмите «Принять недоплату»; выплата уменьшится "
+            "на недостающую часть."
+        )
+    return (
+        f"🧩 <b>Получено {got}, не хватает {missing}.</b> Доплатите недостающую сумму тем же способом "
+        "(тот же адрес и комментарий). Биржи часто удерживают комиссию из суммы перевода."
+    )
+
+
 def _funded(deal: Deal, uid: int, p: dict[str, Any], _: dict[int, User]) -> str:
     if _role(deal, uid) is PartyRole.SELLER:
         return (
@@ -140,6 +154,15 @@ HEADLINES: dict[Notice, Headline] = {
     ),
     Notice.REFUND_STARTED: lambda d, u, p, us: (
         f"↩️ <b>Деньги возвращаются покупателю</b>{': ' + _amount(d, p) if p.get('amount') else ''}."
+    ),
+    Notice.PAYMENT_SEEN: lambda d, u, p, us: (
+        f"👀 <b>Платёж найден в сети: {_amount(d, p)}.</b> Ждём подтверждений сети — обычно несколько "
+        "минут. Ничего делать не нужно: бот зачислит оплату автоматически."
+    ),
+    Notice.PARTIAL_PAYMENT: _partial,
+    Notice.PAYMENT_DROPPED: lambda d, u, p, us: (
+        f"⚠️ <b>Транзакция {esc(str(p.get('tx_hash', ''))[:20])}… исчезла из сети</b> (реорганизация "
+        "или ошибка транзакции). Если деньги списались с вашего кошелька — напишите в поддержку."
     ),
     Notice.REFUND_ADDRESS_NEEDED: lambda d, u, p, us: (
         f"📮 <b>{'Напоминаем: укажите' if p.get('reminder') else 'Укажите'} адрес для возврата</b> "

@@ -123,6 +123,9 @@ class IncomingTransfer(Base):
     memo: Mapped[str | None]
     sol_references: Mapped[list[str] | None] = mapped_column(sa.ARRAY(sa.Text))
     block_number: Mapped[int | None]
+    # Place in the network's scan order (EVM block, TRON block timestamp in ms, TON lt, Solana slot):
+    # a transfer seen at a position the final scan has passed without finding it was dropped.
+    position: Mapped[int | None]
     block_hash: Mapped[str | None]
     block_time: Mapped[datetime | None]
     status: Mapped[TransferStatus] = mapped_column(str_enum(TransferStatus, "status"))

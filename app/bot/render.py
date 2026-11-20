@@ -113,6 +113,7 @@ def render_deal_card(
     payment: PaymentRequest | None = None,
     refund_deadline: datetime | None = None,
     needs_refund_address: bool = False,
+    received: int = 0,
 ) -> str:
     def info(user_id: int | None) -> PartyInfo | None:
         return parties.get(user_id) if user_id is not None else None
@@ -150,7 +151,7 @@ def render_deal_card(
         lines.append(f"Дедлайн: {deal.execution_deadline_at:%d.%m.%Y %H:%M} UTC")
     if viewer_id == deal.seller_id and deal.seller_payout_address:
         lines.append(f"Адрес выплаты: <code>{esc(deal.seller_payout_address)}</code>")
-    lines += _payment_lines(deal, payment, viewer_id)
+    lines += _payment_lines(deal, payment, viewer_id, spec=spec, received=received)
     lines += _progress_lines(
         deal, viewer_id, refund_deadline=refund_deadline, needs_refund_address=needs_refund_address
     )
@@ -238,15 +239,60 @@ def _progress_lines(  # noqa: PLR0912 - one hint per status and role
     return ["", *lines] if lines else []
 
 
-def _payment_lines(deal: Deal, payment: PaymentRequest | None, viewer_id: int) -> list[str]:
+def _payment_lines(
+    deal: Deal, payment: PaymentRequest | None, viewer_id: int, *, spec: AssetSpec, received: int = 0
+) -> list[str]:
     if deal.status is not DealStatus.AWAITING_PAYMENT or payment is None:
         return []
     until = f"{payment.expires_at:%H:%M} UTC"
+    partial = (
+        [f"🧩 Получено {money(received, deal.decimals)} из {money(payment.expected_amount, deal.decimals)}."]
+        if 0 < received < payment.expected_amount
+        else []
+    )
     if viewer_id != deal.buyer_id:
-        return ["", f"⏳ Ждём оплату покупателя до {until}. Не передавайте товар до статуса «Оплачено»."]
-    lines = ["", f"💳 Оплатите <b>{money(payment.expected_amount, deal.decimals)}</b> до {until}."]
+        return [
+            "",
+            f"⏳ Ждём оплату покупателя до {until}. Не передавайте товар до статуса «Оплачено».",
+            *partial,
+        ]
     if deal.provider is Provider.CRYPTOBOT:
-        lines.append("Оплата проходит в @CryptoBot по кнопке ниже — бот увидит её автоматически.")
+        return [
+            "",
+            f"💳 Оплатите <b>{money(payment.expected_amount, deal.decimals)}</b> до {until}.",
+            "Оплата проходит в @CryptoBot по кнопке ниже — бот увидит её автоматически.",
+        ]
+    return [
+        "",
+        *partial,
+        *onchain_instructions(deal, payment, spec, until=until, left=payment.expected_amount - received),
+    ]
+
+
+def onchain_instructions(
+    deal: Deal, payment: PaymentRequest, spec: AssetSpec, *, until: str, left: int
+) -> list[str]:
+    """Exactly what to send, where, and the traps (wrong network, exchange fees)."""
+    network = T.NETWORK_SHORT[deal.network]
+    lines = [
+        f"💳 Переведите ровно <b>{money(left, deal.decimals)}</b> в сети <b>{network}</b> до {until}.",
+        f"Адрес: <code>{esc(payment.deposit_address or '')}</code>",
+    ]
+    if payment.memo:
+        lines.append(f"Комментарий (обязательно): <code>{esc(payment.memo)}</code>")
+    if payment.sol_reference:
+        link = (
+            f"solana:{payment.deposit_address}?amount={format_amount(left, deal.decimals)}"
+            f"&spl-token={spec.contract}&reference={payment.sol_reference}&memo={deal.code}"
+        )
+        lines.append(f"Ссылка Solana Pay: <code>{esc(link)}</code>")
+    lines += [
+        "",
+        f"⚠️ Только USDT и только {network} — перевод в другой сети или другим токеном потеряется.",
+        "Последние цифры суммы — метка вашей сделки. С биржи проверьте, что <b>придёт</b> ровно эта "
+        "сумма: биржа может удержать комиссию.",
+        "Зачисление — после подтверждения сетью, обычно несколько минут. Бот следит сам.",
+    ]
     return lines
 
 

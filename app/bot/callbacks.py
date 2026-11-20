@@ -23,6 +23,7 @@ class DealAct(StrEnum):
     SAVE_TEMPLATE = "tpl"
     PAY = "pay"
     CHECK_PAYMENT = "chk"
+    ACCEPT_UNDERPAYMENT = "aup"  # seller: proceed with what has arrived
     # after funding
     SELLER_DONE = "sd"
     BUYER_GOT = "bg"  # shows the irreversible-confirmation screen

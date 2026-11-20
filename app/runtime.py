@@ -13,9 +13,10 @@ from app.bot.context import BotContext
 from app.bot.storage import RedisKV
 from app.config import Settings, get_chains
 from app.db.session import create_engine, create_sessionmaker
-from app.domain.enums import Network
+from app.domain.enums import Network, Provider
 from app.providers.cryptobot.client import CryptoPayClient
 from app.providers.cryptobot.gateway import CryptoBotGateway
+from app.providers.onchain.gateway import OnchainGateway
 from app.services.deals import PaymentGateway
 from app.services.gateways import RoutingGateway
 from app.services.users import ensure_admins
@@ -56,6 +57,10 @@ async def build_runtime(settings: Settings) -> Runtime:
     if settings.cryptobot_api_token.get_secret_value() and Network.CRYPTOBOT in ctx.chains.enabled_networks():
         cryptopay = CryptoPayClient(settings.cryptobot_api_token, testnet=settings.cryptobot_testnet)
         gateways[Network.CRYPTOBOT] = CryptoBotGateway(cryptopay, settings, ctx.chains, clock=ctx.clock)
+    onchain = OnchainGateway(settings, ctx.chains, clock=ctx.clock)
+    for network in ctx.chains.enabled_networks():
+        if network.provider is Provider.ONCHAIN:
+            gateways[network] = onchain
     ctx.gateway = RoutingGateway(gateways)
     ctx.cryptopay = cryptopay
     async with sessionmaker() as session, session.begin():

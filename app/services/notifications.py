@@ -26,6 +26,9 @@ class Notice(StrEnum):
     COUNTERPARTY_REJECTED = "counterparty_rejected"
     DEAL_ACCEPTED = "deal_accepted"
     PAYMENT_STARTED = "payment_started"
+    PAYMENT_SEEN = "payment_seen"  # on-chain: found in a block, waiting for finality
+    PARTIAL_PAYMENT = "partial_payment"  # on-chain: part of the amount arrived (memo/reference match)
+    PAYMENT_DROPPED = "payment_dropped"  # on-chain: a seen transfer vanished (reorg / failed tx)
     DEAL_FUNDED = "deal_funded"
     SELLER_CONFIRMED = "seller_confirmed"
     PAYOUT_STARTED = "payout_started"

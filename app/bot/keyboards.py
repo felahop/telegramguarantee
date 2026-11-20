@@ -239,6 +239,7 @@ def deal_card_kb(
     now: datetime | None = None,
     can_withdraw_dispute: bool = False,
     needs_refund_address: bool = False,
+    received: int = 0,
 ) -> InlineKeyboardMarkup:
     v = deal.version
 
@@ -273,10 +274,20 @@ def deal_card_kb(
         row = [_btn("✏️ Изменить", cb(DealAct.EDIT))] if is_creator else []
         rows.append([*row, _btn("✖️ Отменить", cb(DealAct.CANCEL))])
     elif deal.status is DealStatus.AWAITING_PAYMENT:
-        if viewer_id == deal.buyer_id and payment is not None and payment.pay_url:
-            amount = format_amount(payment.expected_amount, deal.decimals)
-            rows.append([InlineKeyboardButton(text=f"💳 Оплатить {amount} USDT", url=payment.pay_url)])
+        if viewer_id == deal.buyer_id and payment is not None:
+            if payment.pay_url:
+                amount = format_amount(payment.expected_amount, deal.decimals)
+                rows.append([InlineKeyboardButton(text=f"💳 Оплатить {amount} USDT", url=payment.pay_url)])
             rows.append([_btn("🔄 Я оплатил — проверить", cb(DealAct.CHECK_PAYMENT))])
+        if viewer_id == deal.seller_id and payment is not None and 0 < received < payment.expected_amount:
+            rows.append(
+                [
+                    _btn(
+                        f"🧩 Принять недоплату ({format_amount(received, deal.decimals)})",
+                        cb(DealAct.ACCEPT_UNDERPAYMENT),
+                    )
+                ]
+            )
         rows.append([_btn("✖️ Отменить", cb(DealAct.CANCEL))])
     rows += execution_rows(
         deal,

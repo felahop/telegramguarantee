@@ -1,4 +1,5 @@
-"""Buyer payment: create the payment request (CryptoBot invoice) and re-check a payment on demand."""
+"""Buyer payment: create the payment request (CryptoBot invoice or on-chain instructions), re-check a
+payment on demand; the seller may accept an underpayment."""
 
 from __future__ import annotations
 
@@ -52,8 +53,19 @@ async def on_check_payment(
     await _edit(callback, text, markup)
 
 
+async def on_accept_underpayment(
+    callback: CallbackQuery, callback_data: DealCb, ctx: BotContext, user: User
+) -> None:
+    async with ctx.uow() as uow:
+        deal = await uow.deals.accept_underpayment(user.id, callback_data.id)
+        text, markup = await deal_view(ctx, uow.session, deal, user.id)
+    await callback.answer("Недоплата принята — сделка оплачена.")
+    await _edit(callback, text, markup)
+
+
 def build_router() -> Router:
     router = Router(name="payment")
     router.callback_query.register(on_pay, DealCb.filter(F.a == DealAct.PAY))
     router.callback_query.register(on_check_payment, DealCb.filter(F.a == DealAct.CHECK_PAYMENT))
+    router.callback_query.register(on_accept_underpayment, DealCb.filter(F.a == DealAct.ACCEPT_UNDERPAYMENT))
     return router
