@@ -28,7 +28,10 @@ def upgrade() -> None:
     op.create_check_constraint(op.f("ck_tx_claims_status"), "tx_claims", _check(NEW))
     op.add_column("tx_claims", sa.Column("result", sa.Text(), nullable=True))
     op.create_index(
-        "ix_tx_claims_submitted", "tx_claims", ["created_at"], postgresql_where=sa.text("status = 'submitted'")
+        "ix_tx_claims_submitted",
+        "tx_claims",
+        ["created_at"],
+        postgresql_where=sa.text("status = 'submitted'"),
     )
 
 
