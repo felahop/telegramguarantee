@@ -132,3 +132,10 @@ async def test_trc20_payment_end_to_end(oc: OC, chains: ChainsConfig) -> None:
     await oc.tick()
     assert (await oc.deal(deal_id)).status is DealStatus.FUNDED
     assert await oc.balance(AccountRef.custody(usdt(TRON), world.address)) == request.expected_amount
+
+
+async def test_lookup_tx_for_claims(tron: TronWorld) -> None:
+    tron.pay(25 * U, ts=T0, tx="tx1")
+    [t] = await tron.adapter.lookup_tx("0xTX1".lower().replace("0x", ""))
+    assert (t.tx_hash, t.amount, t.position, t.to_address) == ("tx1", 25 * U, T0, tron.address)
+    assert await tron.adapter.lookup_tx("missing") == []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from urllib.parse import quote
@@ -20,7 +20,7 @@ from app.bot.callbacks import DealAct, DealCb, MenuAct, MenuCb, TplAct, TplCb, W
 from app.bot.drafts import DealDraft, Step
 from app.config import AssetSpec
 from app.db.models import Deal, DealTemplate, PaymentRequest, SavedAddress
-from app.domain.enums import TERMINAL_STATUSES, DealStatus, FeePayer, Network, PartyRole
+from app.domain.enums import TERMINAL_STATUSES, DealStatus, FeePayer, Network, PartyRole, Provider
 from app.domain.fees import FeeBreakdown
 from app.domain.money import format_amount
 
@@ -274,20 +274,7 @@ def deal_card_kb(
         row = [_btn("✏️ Изменить", cb(DealAct.EDIT))] if is_creator else []
         rows.append([*row, _btn("✖️ Отменить", cb(DealAct.CANCEL))])
     elif deal.status is DealStatus.AWAITING_PAYMENT:
-        if viewer_id == deal.buyer_id and payment is not None:
-            if payment.pay_url:
-                amount = format_amount(payment.expected_amount, deal.decimals)
-                rows.append([InlineKeyboardButton(text=f"💳 Оплатить {amount} USDT", url=payment.pay_url)])
-            rows.append([_btn("🔄 Я оплатил — проверить", cb(DealAct.CHECK_PAYMENT))])
-        if viewer_id == deal.seller_id and payment is not None and 0 < received < payment.expected_amount:
-            rows.append(
-                [
-                    _btn(
-                        f"🧩 Принять недоплату ({format_amount(received, deal.decimals)})",
-                        cb(DealAct.ACCEPT_UNDERPAYMENT),
-                    )
-                ]
-            )
+        rows += _payment_rows(deal, viewer_id, payment, received, cb)
         rows.append([_btn("✖️ Отменить", cb(DealAct.CANCEL))])
     rows += execution_rows(
         deal,
@@ -302,6 +289,27 @@ def deal_card_kb(
         )
     rows.append([_btn("🔄 Обновить", cb(DealAct.VIEW))])
     return _markup(rows)
+
+
+def _payment_rows(
+    deal: Deal,
+    viewer_id: int,
+    payment: PaymentRequest | None,
+    received: int,
+    cb: Callable[[DealAct], DealCb],
+) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    if viewer_id == deal.buyer_id and payment is not None:
+        if payment.pay_url:
+            amount = format_amount(payment.expected_amount, deal.decimals)
+            rows.append([InlineKeyboardButton(text=f"💳 Оплатить {amount} USDT", url=payment.pay_url)])
+        rows.append([_btn("🔄 Я оплатил — проверить", cb(DealAct.CHECK_PAYMENT))])
+        if deal.provider is Provider.ONCHAIN:
+            rows.append([_btn("🧾 Бот не видит оплату — указать hash", cb(DealAct.TX_CLAIM))])
+    if viewer_id == deal.seller_id and payment is not None and 0 < received < payment.expected_amount:
+        label = f"🧩 Принять недоплату ({format_amount(received, deal.decimals)})"
+        rows.append([_btn(label, cb(DealAct.ACCEPT_UNDERPAYMENT))])
+    return rows
 
 
 def cancel_confirm_kb(deal: Deal) -> InlineKeyboardMarkup:

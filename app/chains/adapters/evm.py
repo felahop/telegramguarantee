@@ -184,6 +184,25 @@ class EvmAdapter:
         )
         return int(raw, 16)
 
+    async def lookup_tx(self, tx_hash: str) -> list[ObservedTransfer]:
+        """USDT transfers to our addresses in one transaction (the buyer's tx-hash claim)."""
+        receipt = await self._primary.json_rpc("eth_getTransactionReceipt", [tx_hash])
+        if not receipt or receipt.get("status") != "0x1":
+            return []
+        found = []
+        for entry in receipt.get("logs") or []:
+            parsed = self._parse(
+                {
+                    **entry,
+                    "blockNumber": entry.get("blockNumber", receipt.get("blockNumber")),
+                    "blockHash": entry.get("blockHash", receipt.get("blockHash")),
+                    "transactionHash": entry.get("transactionHash", tx_hash),
+                }
+            )
+            if parsed is not None:
+                found.append(parsed)
+        return found
+
     # ── outgoing (used by the payout worker) ──────────────────────────────
     async def chain_id(self) -> int:
         return int(await self._primary.json_rpc("eth_chainId", []), 16)

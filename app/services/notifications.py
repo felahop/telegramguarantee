@@ -29,6 +29,7 @@ class Notice(StrEnum):
     PAYMENT_SEEN = "payment_seen"  # on-chain: found in a block, waiting for finality
     PARTIAL_PAYMENT = "partial_payment"  # on-chain: part of the amount arrived (memo/reference match)
     PAYMENT_DROPPED = "payment_dropped"  # on-chain: a seen transfer vanished (reorg / failed tx)
+    TX_CLAIM_RESULT = "tx_claim_result"  # what the check of the buyer's transaction hash found
     DEAL_FUNDED = "deal_funded"
     SELLER_CONFIRMED = "seller_confirmed"
     PAYOUT_STARTED = "payout_started"

@@ -131,6 +131,27 @@ class ChainWatcher:
             behind=final_upto < head.final or seen_upto < head.latest,
         )
 
+    async def ingest(self, transfers: list[ObservedTransfer]) -> list[int]:
+        """Credit transfers found outside the scan (a buyer's tx-hash claim), exactly as the final scan
+        would: only final ones (the caller checks), each confirmed by the second source, then the
+        usual matching rules. Already recorded transfers are left alone. Returns their row ids."""
+        verdicts = {t.key: await self._adapter.verify(t) for t in transfers}
+        async with self._sm() as session, session.begin():
+            payments = PaymentService(
+                session, self._settings, self._chains, gateway=self._gateway, clock=self._clock
+            )
+            for t in transfers:
+                await self._finalize(session, payments, t, verified=verdicts[t.key])
+            ids = await session.execute(
+                sa.select(IncomingTransfer.id).where(
+                    IncomingTransfer.network == self.network,
+                    sa.tuple_(IncomingTransfer.tx_hash, IncomingTransfer.event_index).in_(
+                        [t.key for t in transfers]
+                    ),
+                )
+            )
+            return list(ids.scalars())
+
     async def record_error(self, exc: BaseException) -> None:
         async with self._sm() as session, session.begin():
             await self._ensure_row(session, None)

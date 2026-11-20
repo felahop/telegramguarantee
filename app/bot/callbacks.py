@@ -24,6 +24,7 @@ class DealAct(StrEnum):
     PAY = "pay"
     CHECK_PAYMENT = "chk"
     ACCEPT_UNDERPAYMENT = "aup"  # seller: proceed with what has arrived
+    TX_CLAIM = "txc"  # buyer: "I paid, here is the transaction hash"
     # after funding
     SELLER_DONE = "sd"
     BUYER_GOT = "bg"  # shows the irreversible-confirmation screen

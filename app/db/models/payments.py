@@ -166,7 +166,12 @@ class TxClaim(Base):
     incoming_transfer_id: Mapped[int | None] = mapped_column(sa.ForeignKey("incoming_transfers.id"))
     status: Mapped[TxClaimStatus] = mapped_column(str_enum(TxClaimStatus, "status"))
     reviewed_by: Mapped[int | None]
+    result: Mapped[str | None]  # what the lookup found, for the buyer and the admins
     created_at: Mapped[datetime] = created_at_column()
+
+    __table_args__ = (
+        sa.Index("ix_tx_claims_submitted", "created_at", postgresql_where=sa.text("status = 'submitted'")),
+    )
 
 
 class ChainCursor(Base):

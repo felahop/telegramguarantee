@@ -154,6 +154,7 @@ class MatchMethod(StrEnum):
 
 
 class TxClaimStatus(StrEnum):
+    SUBMITTED = "submitted"  # the buyer sent a hash; the worker has not looked it up yet
     AUTO_MATCHED = "auto_matched"
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"

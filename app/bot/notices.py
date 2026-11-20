@@ -50,6 +50,21 @@ def _who(users: dict[int, User], user_id: object) -> str:
     return "пользователь"
 
 
+TX_CLAIM_TEXTS: dict[str, str] = {
+    "credited": "✅ <b>Транзакция найдена и зачислена</b> по этой сделке.",
+    "needs_admin": (
+        "🧾 <b>Транзакция найдена</b>, но сумма или комментарий не совпали с этой сделкой. Деньги в "
+        "безопасности: администратор проверит перевод и привяжет его или вернёт."
+    ),
+    "belongs_to_another_deal": "⛔️ Эта транзакция уже зачислена по другой сделке.",
+    "no_usdt_to_us": (
+        "❓ В этой транзакции нет финального перевода USDT на адрес гаранта. Проверьте сеть, токен и адрес; "
+        "если перевод ещё подтверждается — пришлите hash позже."
+    ),
+    "network_not_watched": "⚠️ Эта сеть сейчас не обслуживается. Напишите в поддержку.",
+}
+
+
 def _partial(deal: Deal, uid: int, p: dict[str, Any], _: dict[int, User]) -> str:
     got, missing = _amount(deal, p, "received"), _amount(deal, p, "missing")
     if _role(deal, uid) is PartyRole.SELLER:
@@ -160,6 +175,9 @@ HEADLINES: dict[Notice, Headline] = {
         "минут. Ничего делать не нужно: бот зачислит оплату автоматически."
     ),
     Notice.PARTIAL_PAYMENT: _partial,
+    Notice.TX_CLAIM_RESULT: lambda d, u, p, us: TX_CLAIM_TEXTS.get(
+        str(p.get("result")), "🧾 Проверка транзакции завершена."
+    ),
     Notice.PAYMENT_DROPPED: lambda d, u, p, us: (
         f"⚠️ <b>Транзакция {esc(str(p.get('tx_hash', ''))[:20])}… исчезла из сети</b> (реорганизация "
         "или ошибка транзакции). Если деньги списались с вашего кошелька — напишите в поддержку."

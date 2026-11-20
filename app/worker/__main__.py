@@ -20,8 +20,10 @@ from app.chains.adapters.tron import TronAdapter
 from app.chains.registry import build_adapters
 from app.chains.watcher import ChainWatcher, run_watcher
 from app.config import get_settings
+from app.domain.enums import Network
 from app.logging import configure_logging, get_logger
 from app.runtime import build_runtime
+from app.services.tx_claims import process_claims
 from app.signer.remote import RemoteSigner
 from app.signer.signer import Signer, SigningService
 from app.worker.cryptobot import run_payouts, run_poller
@@ -31,6 +33,7 @@ from app.worker.periodic import reconciliation_job, run_periodic
 from app.worker.timers import run_timers
 
 log = get_logger(__name__)
+CLAIMS_POLL_SECONDS = 10.0
 
 
 async def _signer(ctx: BotContext) -> SigningService:
@@ -49,6 +52,7 @@ async def _chain_jobs(ctx: BotContext, stop: asyncio.Event) -> list[Coroutine[An
     settings = ctx.settings
     signer = await _signer(ctx) if ctx.chain_adapters else None
     jobs: list[Coroutine[Any, Any, None]] = []
+    watchers: dict[Network, ChainWatcher] = {}
     for network, adapter in ctx.chain_adapters.items():
         executor: OnchainPayouts | None = None
         if isinstance(adapter, EvmAdapter):
@@ -67,8 +71,24 @@ async def _chain_jobs(ctx: BotContext, stop: asyncio.Event) -> list[Coroutine[An
         watcher = ChainWatcher(
             ctx.sessionmaker, settings, ctx.chains, adapter, clock=ctx.clock, gateway=ctx.gateway
         )
+        watchers[network] = watcher
         jobs.append(run_watcher(watcher, ctx.chains.networks[network].poll_interval_seconds, stop))
+    if watchers:
+        jobs.append(run_claims(ctx, watchers, stop))
     return jobs
+
+
+async def run_claims(ctx: BotContext, watchers: dict[Network, ChainWatcher], stop: asyncio.Event) -> None:
+    """Buyers' "here is my transaction hash" requests, looked up by the worker (it has the RPCs)."""
+    while not stop.is_set():
+        try:
+            await process_claims(ctx.sessionmaker, ctx.chain_adapters, watchers, clock=ctx.clock)
+        except Exception as exc:
+            log.warning("tx_claims_loop_error", error=repr(exc))
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=CLAIMS_POLL_SECONDS)
+        except TimeoutError:
+            continue
 
 
 async def main() -> None:

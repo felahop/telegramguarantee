@@ -90,6 +90,9 @@ class FakeAdapter:
             raise ChainUnavailable("second source is down")
         return transfer.tx_hash not in self.disputed
 
+    async def lookup_tx(self, tx_hash: str) -> list[ObservedTransfer]:
+        return [t for t in self.transfers.values() if t.tx_hash == tx_hash and t.position <= self.latest]
+
     async def token_balance(self, address: str) -> int:
         return sum(t.amount for t in self.transfers.values() if t.position <= self.final)
 

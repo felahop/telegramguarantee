@@ -158,6 +158,24 @@ class SolanaAdapter:
             raw={"signature": signature, "slot": tx["slot"]},
         )
 
+    async def lookup_tx(self, signature: str) -> list[ObservedTransfer]:
+        """The increase of our USDT accounts in one finalized transaction (tx-hash claim)."""
+        tx = await self._primary.json_rpc(
+            "getTransaction",
+            [
+                signature,
+                {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0},
+            ],
+        )
+        if not tx:
+            return []
+        found = []
+        for owner in self._addresses:
+            transfer = self._parse(tx, signature, owner, set(await self.token_accounts(owner)))
+            if transfer is not None:
+                found.append(transfer)
+        return found
+
     async def verify(self, transfer: ObservedTransfer) -> bool:
         tx = await self._verifier.json_rpc(
             "getTransaction",

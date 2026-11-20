@@ -140,3 +140,10 @@ async def test_solana_pay_reference_end_to_end(oc: OC, chains: ChainsConfig) -> 
         node.finalized = node.confirmed
     await oc.tick(SOL)
     assert (await oc.deal(deal_id)).status is DealStatus.FUNDED
+
+
+async def test_lookup_tx_for_claims(sol: SolWorld) -> None:
+    sol.pay(40 * U, slot=299_999_900, sig="sig-a")
+    [t] = await sol.adapter.lookup_tx("sig-a")
+    assert (t.tx_hash, t.amount) == ("sig-a", 40 * U)
+    assert await sol.adapter.lookup_tx("sig-missing") == []

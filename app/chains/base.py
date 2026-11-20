@@ -70,6 +70,10 @@ class ChainAdapter(Protocol):
         (never credit); raises ChainUnavailable when it cannot tell right now."""
         ...
 
+    async def lookup_tx(self, tx_hash: str) -> list[ObservedTransfer]:
+        """Final USDT transfers to our addresses in one transaction (empty if none / not final)."""
+        ...
+
     async def token_balance(self, address: str) -> int:
         """USDT balance of an address at the final head (for reconciliation)."""
         ...

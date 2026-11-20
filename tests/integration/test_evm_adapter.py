@@ -201,3 +201,12 @@ def test_startup_refuses_a_network_without_a_watcher(chains: ChainsConfig) -> No
         check_supported(chains)  # the test config enables TON
     networks = {n: c.model_copy(update={"enabled": n is not Network.TON}) for n, c in chains.networks.items()}
     check_supported(ChainsConfig(networks=networks))
+
+
+async def test_lookup_tx_for_claims(evm: EvmWorld) -> None:
+    evm.pay(150 * E18, block=950, tx="0xaaa", index=2)
+    [t] = await evm.adapter.lookup_tx("0xaaa")
+    assert (t.tx_hash, t.event_index, t.amount, t.position) == ("0xaaa", 2, 150 * E18, 950)
+    assert await evm.adapter.lookup_tx("0xunknown") == []
+    evm.primary.receipts["0xaaa"]["status"] = "0x0"
+    assert await evm.adapter.lookup_tx("0xaaa") == []

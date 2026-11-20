@@ -172,6 +172,43 @@ class TronAdapter:
             raise ChainUnavailable("balanceOf returned nothing")
         return int(values[0], 16)
 
+    async def lookup_tx(self, tx_hash: str) -> list[ObservedTransfer]:
+        """USDT transfers to our addresses in one solidified transaction (tx-hash claim)."""
+        tx = tx_hash.lower().removeprefix("0x")
+        info = await self._primary.post("/walletsolidity/gettransactioninfobyid", {"value": tx})
+        if not info or (info.get("receipt") or {}).get("result") != "SUCCESS":
+            return []
+        ours = {tron_hex(a): a for a in self._addresses}
+        found: list[ObservedTransfer] = []
+        ordinal = 0
+        for entry in info.get("log") or []:
+            topics = entry.get("topics") or []
+            if (
+                str(entry.get("address", "")).lower().removeprefix("41")[-40:] != self._contract_hex
+                or len(topics) != 3
+                or str(topics[0]).lower() != TRANSFER_TOPIC
+                or str(topics[2]).lower()[-40:] not in ours
+            ):
+                continue
+            amount = int(entry.get("data") or "0", 16)
+            if amount <= 0:
+                continue
+            found.append(
+                ObservedTransfer(
+                    network=self.network,
+                    tx_hash=tx,
+                    event_index=ordinal,
+                    position=int(info.get("blockTimeStamp") or 0),
+                    token_contract=self._contract,
+                    to_address=ours[str(topics[2]).lower()[-40:]],
+                    amount=amount,
+                    from_address=tron_base58(str(topics[1])),
+                    raw={"info": info},
+                )
+            )
+            ordinal += 1
+        return found
+
     # ── outgoing (used by the payout worker) ──────────────────────────────
     async def ref_block(self) -> RefBlock:
         """The solidified block as the reference block: it cannot be reorganized away."""
