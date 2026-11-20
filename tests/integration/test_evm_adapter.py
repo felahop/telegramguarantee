@@ -189,4 +189,15 @@ def test_registry_builds_evm_adapters(chains: ChainsConfig, settings: object) ->
     assert isinstance(adapters[Network.BSC], EvmAdapter)
     assert isinstance(adapters[Network.ETH], EvmAdapter)
     assert type(adapters[Network.TRON]).__name__ == "TronAdapter"
+    assert type(adapters[Network.SOL]).__name__ == "SolanaAdapter"
     assert Network.CRYPTOBOT not in adapters
+    assert Network.TON not in adapters
+
+
+def test_startup_refuses_a_network_without_a_watcher(chains: ChainsConfig) -> None:
+    from app.chains.registry import check_supported  # noqa: PLC0415
+
+    with pytest.raises(RuntimeError, match="ton"):
+        check_supported(chains)  # the test config enables TON
+    networks = {n: c.model_copy(update={"enabled": n is not Network.TON}) for n, c in chains.networks.items()}
+    check_supported(ChainsConfig(networks=networks))

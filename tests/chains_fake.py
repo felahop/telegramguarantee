@@ -200,3 +200,105 @@ class FakeTronNode:
 
 def _tron_block(ts: int) -> dict[str, Any]:
     return {"blockID": "00", "block_header": {"raw_data": {"number": ts // 3000, "timestamp": ts}}}
+
+
+@dataclass
+class FakeSolanaNode:
+    """Solana JSON-RPC: slots, token accounts, signatures per account, jsonParsed transactions."""
+
+    confirmed: int = 300_000_000
+    finalized: int = 299_999_960
+    token_accounts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # owner → accounts
+    signatures: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # account → newest first
+    transactions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    balances: dict[str, int] = field(default_factory=dict)
+    calls: list[tuple[str, list[Any]]] = field(default_factory=list)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        method, params = body["method"], body["params"]
+        self.calls.append((method, params))
+        result = getattr(self, "_" + method)(params)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": result})
+
+    def _commit_slot(self, options: dict[str, Any]) -> int:
+        return self.finalized if options.get("commitment") == "finalized" else self.confirmed
+
+    def _getSlot(self, p: list[Any]) -> int:
+        return self._commit_slot(p[0])
+
+    def _getTokenAccountsByOwner(self, p: list[Any]) -> dict[str, Any]:
+        owner, mint = p[0], p[1]["mint"]
+        return {
+            "value": [
+                a
+                for a in self.token_accounts.get(owner, [])
+                if a["account"]["data"]["parsed"]["info"]["mint"] == mint
+            ]
+        }
+
+    def _getSignaturesForAddress(self, p: list[Any]) -> list[dict[str, Any]]:
+        account, options = p[0], p[1]
+        limit_slot = self._commit_slot(options)
+        items = [s for s in self.signatures.get(account, []) if s["slot"] <= limit_slot]
+        if options.get("before"):
+            index = next(i for i, s in enumerate(items) if s["signature"] == options["before"])
+            items = items[index + 1 :]
+        return items[: options["limit"]]
+
+    def _getTransaction(self, p: list[Any]) -> dict[str, Any] | None:
+        tx = self.transactions.get(p[0])
+        if tx is None or tx["slot"] > self._commit_slot(p[1]):
+            return None
+        return tx
+
+    def _getTokenAccountBalance(self, p: list[Any]) -> dict[str, Any]:
+        return {"value": {"amount": str(self.balances.get(p[0], 0)), "decimals": 6}}
+
+    # ── test controls ───────────────────────────────────────────────────
+    def open_account(self, owner: str, account: str, mint: str) -> None:
+        self.token_accounts.setdefault(owner, []).append(
+            {
+                "pubkey": account,
+                "account": {
+                    "data": {"parsed": {"info": {"mint": mint, "owner": owner}}},
+                    "owner": "Tokenkeg",
+                },
+            }
+        )
+
+    def transfer(
+        self,
+        *,
+        account: str,
+        mint: str,
+        amount: int,
+        slot: int,
+        signature: str,
+        before: int = 0,
+        refs: tuple[str, ...] = (),
+        memo: str | None = None,
+        err: object = None,
+    ) -> None:
+        keys = ["Payer111", "SourceAta111", account, *refs]
+        instructions: list[dict[str, Any]] = [{"program": "spl-token", "parsed": {"type": "transferChecked"}}]
+        if memo is not None:
+            instructions.append({"program": "spl-memo", "parsed": memo})
+        self.transactions[signature] = {
+            "slot": slot,
+            "meta": {
+                "err": err,
+                "preTokenBalances": [
+                    {"accountIndex": 1, "mint": mint, "uiTokenAmount": {"amount": str(10**9)}},
+                    {"accountIndex": 2, "mint": mint, "uiTokenAmount": {"amount": str(before)}},
+                ],
+                "postTokenBalances": [
+                    {"accountIndex": 1, "mint": mint, "uiTokenAmount": {"amount": str(10**9 - amount)}},
+                    {"accountIndex": 2, "mint": mint, "uiTokenAmount": {"amount": str(before + amount)}},
+                ],
+            },
+            "transaction": {
+                "message": {"accountKeys": [{"pubkey": k} for k in keys], "instructions": instructions}
+            },
+        }
+        self.signatures.setdefault(account, []).insert(0, {"signature": signature, "slot": slot, "err": err})

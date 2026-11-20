@@ -1,6 +1,8 @@
 # Per-network configuration. Copy to chains.yaml and fill deposit addresses.
 # Contracts below are MAINNET USDT and form the token whitelist: transfers of any other token are ignored.
 # Public RPC endpoints are examples — verify limits (especially eth_getLogs) before relying on them.
+# rpc and verify_rpc must be DIFFERENT providers: every payment is confirmed by both before crediting.
+# TON cannot be enabled yet (no ChainWatcher adapter): the bot refuses to start with it enabled.
 networks:
   cryptobot:
     enabled: true

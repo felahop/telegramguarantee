@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from app.chains.adapters.evm import EvmAdapter
+from app.chains.adapters.solana import SolanaAdapter
 from app.chains.adapters.tron import TronAdapter
 from app.chains.addresses import validate_address
 from app.chains.base import ChainAdapter
@@ -14,6 +15,20 @@ from app.domain.enums import Network, Provider
 from app.logging import get_logger
 
 log = get_logger(__name__)
+
+# Networks a watcher exists for. Enabling any other on-chain network would let the bot issue
+# payment instructions that nobody credits, so startup refuses it (see check_supported).
+SUPPORTED_NETWORKS = frozenset({Network.BSC, Network.ETH, Network.TRON, Network.SOL})
+
+
+def check_supported(chains: ChainsConfig) -> None:
+    missing = [
+        n.value
+        for n in chains.enabled_networks()
+        if n.provider is Provider.ONCHAIN and n not in SUPPORTED_NETWORKS
+    ]
+    if missing:
+        raise RuntimeError(f"no ChainWatcher for {', '.join(missing)} yet: set enabled: false in chains.yaml")
 
 
 def build_adapters(
@@ -39,6 +54,13 @@ def build_adapters(
                 addresses=(address,),
                 primary=EndpointPool(cfg.rpc, key_header="TRON-PRO-API-KEY", transport=transport),
                 verifier=EndpointPool(cfg.verify_rpc, key_header="TRON-PRO-API-KEY", transport=transport),
+            )
+        elif network is Network.SOL:
+            adapters[network] = SolanaAdapter(
+                cfg,
+                addresses=(address,),
+                primary=EndpointPool(cfg.rpc, transport=transport),
+                verifier=EndpointPool(cfg.verify_rpc, transport=transport),
             )
         else:
             log.warning("chain_adapter_missing", network=network.value)

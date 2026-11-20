@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.bot.context import BotContext
 from app.bot.storage import RedisKV
+from app.chains.registry import check_supported
 from app.config import Settings, get_chains
 from app.db.session import create_engine, create_sessionmaker
 from app.domain.enums import Network, Provider
@@ -42,6 +43,7 @@ class Runtime:
 
 
 async def build_runtime(settings: Settings) -> Runtime:
+    check_supported(get_chains())  # never accept payments in a network nobody watches
     engine = create_engine(settings.database_url)
     sessionmaker = create_sessionmaker(engine)
     redis = Redis.from_url(settings.redis_url)
