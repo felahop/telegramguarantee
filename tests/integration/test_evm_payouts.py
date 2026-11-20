@@ -282,3 +282,92 @@ def test_keystore_is_decrypted_at_start(tmp_path: Path, pay: Pay) -> None:
     bad = settings.model_copy(update={"signer_password": SecretStr("wrong")})
     with pytest.raises(ValueError):
         Signer.from_keystore(bad, pay.oc.ctx.chains, clock=pay.oc.clock)
+
+
+# ── the signer's own rules and the separate signer process ──────────────────
+
+
+async def test_a_signed_payout_is_never_signed_with_another_nonce(pay: Pay) -> None:
+    from app.db.models import AdminAudit  # noqa: PLC0415
+
+    await pay.confirmed_deal()
+    [payout] = await pay.payouts()
+    fees = EvmFees(gas=100_000, gas_price=10**9)
+    async with pay.oc.ctx.sessionmaker() as s, s.begin():
+        first = await pay.signer.sign_evm_transfer(s, payout.id, from_address=HOT, nonce=0, fees=fees)
+    async with pay.oc.ctx.sessionmaker() as s, s.begin():  # the same nonce: only one can ever land
+        again = await pay.signer.sign_evm_transfer(s, payout.id, from_address=HOT, nonce=0, fees=fees)
+    assert again.tx_hash == first.tx_hash
+    with pytest.raises(SignerRefused, match="already signed"):
+        async with pay.oc.ctx.sessionmaker() as s, s.begin():
+            await pay.signer.sign_evm_transfer(s, payout.id, from_address=HOT, nonce=1, fees=fees)
+    async with pay.oc.ctx.sessionmaker() as s, s.begin():  # an admin retried it (after a revert)
+        s.add(AdminAudit(admin_id=ADMIN, action="retry_payout", target_type="payout", target_id=payout.id))
+    async with pay.oc.ctx.sessionmaker() as s, s.begin():
+        await pay.signer.sign_evm_transfer(s, payout.id, from_address=HOT, nonce=1, fees=fees)
+
+
+async def test_daily_limit_counts_the_signers_own_log(pay: Pay) -> None:
+    await pay.confirmed_deal("100")
+    await pay.confirmed_deal("60")
+    first, second = await pay.payouts()
+    strict = Signer(
+        {HOT: Account.from_key(KEY)},
+        pay.oc.ctx.settings.model_copy(update={"signer_daily_limit_usdt": Decimal("150")}),
+        pay.oc.ctx.chains,
+        clock=pay.oc.clock,
+    )
+    fees = EvmFees(gas=100_000, gas_price=10**9)
+    async with pay.oc.ctx.sessionmaker() as s, s.begin():
+        await strict.sign_evm_transfer(s, first.id, from_address=HOT, nonce=0, fees=fees)
+    with pytest.raises(SignerRefused, match="24-hour"):
+        async with pay.oc.ctx.sessionmaker() as s, s.begin():
+            await strict.sign_evm_transfer(s, second.id, from_address=HOT, nonce=1, fees=fees)
+
+
+async def test_remote_signer_over_hmac(pay: Pay) -> None:
+    import time  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+    from aiohttp.test_utils import TestServer  # noqa: PLC0415
+
+    from app.signer.remote import RemoteSigner, SignerUnavailable, build_app, request_signature  # noqa: PLC0415
+
+    secret = b"s" * 32
+    server = TestServer(build_app(pay.signer, pay.oc.ctx.sessionmaker, secret))
+    await server.start_server()
+    url = str(server.make_url(""))
+    try:
+        await pay.confirmed_deal()
+        pay.fund_hot_wallet(10_000 * E18)
+        remote = RemoteSigner(url, secret)
+        await remote.load()
+        assert remote.has_key(HOT)
+        assert await EvmPayouts(pay.oc.ctx, pay.adapter, remote).sign_next()
+        [attempt] = await pay.attempts()
+        assert attempt.raw_tx and attempt.nonce == 0
+
+        intruder = RemoteSigner(url, b"x" * 32)
+        with pytest.raises(SignerUnavailable, match="401"):
+            await intruder.load()
+
+        body = b""
+        ts = f"{time.time():.3f}"
+        headers = {"X-Signer-Timestamp": ts, "X-Signer-Signature": request_signature(secret, ts, body)}
+        async with httpx.AsyncClient(base_url=url, trust_env=False) as client:
+            assert (await client.get("/v1/wallets", headers=headers)).status_code == 200
+            assert (await client.get("/v1/wallets", headers=headers)).status_code == 409  # replayed
+            stale = f"{time.time() - 120:.3f}"
+            old = {"X-Signer-Timestamp": stale, "X-Signer-Signature": request_signature(secret, stale, body)}
+            assert (await client.get("/v1/wallets", headers=old)).status_code == 401
+        await remote.close()
+        await intruder.close()
+    finally:
+        await server.close()
+
+
+def test_signer_api_secret_must_be_long(pay: Pay) -> None:
+    from app.signer.remote import build_app  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="32 bytes"):
+        build_app(pay.signer, pay.oc.ctx.sessionmaker, b"short")

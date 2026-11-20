@@ -112,3 +112,20 @@ class PayoutApproval(Base):
     decision: Mapped[ApprovalDecision] = mapped_column(str_enum(ApprovalDecision, "decision"))
     totp_ok: Mapped[bool]
     created_at: Mapped[datetime] = created_at_column()
+
+
+class SignerLog(Base):
+    """Every signature the signer produced, written only by the signer (its own record: daily limits
+    and the "never sign a payout twice" rule do not depend on tables the worker writes)."""
+
+    __tablename__ = "signer_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    payout_id: Mapped[int] = mapped_column(sa.ForeignKey("payouts.id"), index=True)
+    network: Mapped[Network] = mapped_column(str_enum(Network, "network"))
+    wallet: Mapped[str]
+    tx_hash: Mapped[str]
+    nonce: Mapped[int | None]
+    amount: Mapped[int] = mapped_column(MinorAmount)
+    valid_until: Mapped[datetime | None]
+    created_at: Mapped[datetime] = created_at_column()

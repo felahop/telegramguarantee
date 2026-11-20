@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import base58
 import sqlalchemy as sa
@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chains.addresses import validate_address
 from app.chains.tron_tx import RefBlock, signed_transaction, trc20_transfer_raw, tx_id
 from app.config import ChainsConfig, Settings
-from app.db.models import Payout, PayoutApproval, PayoutAttempt
+from app.db.models import AdminAudit, Payout, PayoutApproval, SignerLog
 from app.domain.enums import ApprovalDecision, Network, PayoutStatus
 from app.domain.errors import DomainError
 from app.domain.money import to_minor
@@ -44,6 +44,7 @@ log = get_logger(__name__)
 
 TRANSFER_SELECTOR = "a9059cbb"
 SIGNABLE = frozenset({PayoutStatus.QUEUED, PayoutStatus.FAILED_RETRYABLE})
+RESIGN_MARGIN = timedelta(minutes=2)
 
 
 class SignerRefused(DomainError):
@@ -106,6 +107,14 @@ class Signer:
     def has_key(self, address: str) -> bool:
         return address.lower() in self._keys
 
+    @property
+    def wallets(self) -> list[str]:
+        """Addresses only (EVM checksummed and TRON base58), never key material."""
+        out: list[str] = []
+        for account in {id(a): a for a in self._keys.values()}.values():
+            out += [account.address, tron_address(account)]
+        return sorted(out)
+
     async def sign_evm_transfer(
         self, session: AsyncSession, payout_id: int, *, from_address: str, nonce: int, fees: EvmFees
     ) -> SignedTx:
@@ -119,6 +128,7 @@ class Signer:
         if not cfg.chain_id:
             raise SignerRefused("chain_id is not configured", network=network)
         recipient = await self._check(session, payout, from_address)
+        await self._check_resign(session, payout, nonce=nonce)
         account = self._keys[from_address.lower()]
         tx: dict[str, Any] = {
             "to": to_checksum_address(cfg.contract),
@@ -141,8 +151,9 @@ class Signer:
             tx["gasPrice"] = fees.gas_price or 0
         signed = account.sign_transaction(tx)
         tx_hash = "0x" + bytes(signed.hash).hex()
-        log.info("signer_signed", payout_id=payout.id, network=network.value, nonce=nonce, tx_hash=tx_hash)
-        return SignedTx(raw=bytes(signed.raw_transaction), tx_hash=tx_hash, nonce=nonce)
+        result = SignedTx(raw=bytes(signed.raw_transaction), tx_hash=tx_hash, nonce=nonce)
+        await self._log(session, payout, from_address, result)
+        return result
 
     async def sign_tron_transfer(
         self,
@@ -159,6 +170,7 @@ class Signer:
         if payout is None or payout.network is not Network.TRON:
             raise SignerRefused("not a TRON payout", payout_id=payout_id)
         recipient = await self._check(session, payout, from_address)
+        await self._check_resign(session, payout, nonce=None)
         cfg = self._chains.networks[Network.TRON]
         expiration = now_ms + int(ttl.total_seconds() * 1000)
         raw = trc20_transfer_raw(
@@ -174,12 +186,61 @@ class Signer:
         digest = bytes.fromhex(tx_id(raw))
         signature = self._keys[from_address.lower()].unsafe_sign_hash(Hash32(digest))
         sig = signature.r.to_bytes(32, "big") + signature.s.to_bytes(32, "big") + bytes([signature.v])
-        log.info("signer_signed", payout_id=payout.id, network="tron", tx_hash=tx_id(raw))
-        return SignedTx(
+        result = SignedTx(
             raw=signed_transaction(raw, sig),
             tx_hash=tx_id(raw),
             valid_until=datetime.fromtimestamp(expiration / 1000, tz=UTC),
         )
+        await self._log(session, payout, from_address, result)
+        return result
+
+    async def _check_resign(self, session: AsyncSession, payout: Payout, *, nonce: int | None) -> None:
+        """A payout already signed may be signed again only when both cannot land:
+
+        * EVM, the same nonce: only one transaction per nonce can ever be included;
+        * TRON, the previous transaction expired (plus a margin) and can no longer be included;
+        * or an admin explicitly retried the payout after the last signature (after a revert).
+        """
+        last = (
+            await session.execute(
+                sa.select(SignerLog)
+                .where(SignerLog.payout_id == payout.id)
+                .order_by(SignerLog.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if last is None:
+            return
+        if nonce is not None and last.nonce == nonce:
+            return
+        if last.valid_until is not None and self._clock() > last.valid_until + RESIGN_MARGIN:
+            return
+        retried = await session.scalar(
+            sa.select(sa.func.count())
+            .select_from(AdminAudit)
+            .where(
+                AdminAudit.action == "retry_payout",
+                AdminAudit.target_id == payout.id,
+                AdminAudit.created_at > last.created_at,
+            )
+        )
+        if not retried:
+            raise SignerRefused("this payout was already signed and may still land", payout_id=payout.id)
+
+    async def _log(self, session: AsyncSession, payout: Payout, wallet: str, signed: SignedTx) -> None:
+        session.add(
+            SignerLog(
+                payout_id=payout.id,
+                network=payout.network,
+                wallet=wallet,
+                tx_hash=signed.tx_hash,
+                nonce=signed.nonce,
+                amount=payout.amount,
+                valid_until=signed.valid_until,
+            )
+        )
+        await session.flush()
+        log.info("signer_signed", payout_id=payout.id, network=payout.network.value, tx_hash=signed.tx_hash)
 
     async def _check(self, session: AsyncSession, payout: Payout, from_address: str) -> str:
         if payout.status not in SIGNABLE:
@@ -213,13 +274,12 @@ class Signer:
         return recipient
 
     async def _check_daily_limit(self, session: AsyncSession, payout: Payout, decimals: int) -> None:
-        """Rolling 24 h over everything signed, in USDT cents (networks have different decimals)."""
-        since = sa.func.now() - timedelta(hours=24)  # attempts carry database time
+        """Rolling 24 h over the signer's own log (each payout once), in USDT cents."""
+        since = sa.func.now() - timedelta(hours=24)  # the log carries database time
         rows = await session.execute(
-            sa.select(Payout.network, Payout.amount).where(
-                Payout.id.in_(sa.select(PayoutAttempt.payout_id).where(PayoutAttempt.created_at >= since)),
-                Payout.id != payout.id,
-            )
+            sa.select(SignerLog.network, sa.func.max(SignerLog.amount))
+            .where(SignerLog.created_at >= since, SignerLog.payout_id != payout.id)
+            .group_by(SignerLog.payout_id, SignerLog.network)
         )
         cents = 0
         for network, amount in rows.all():
@@ -232,3 +292,24 @@ class Signer:
 def tron_address(account: LocalAccount) -> str:
     """The TRON address of a secp256k1 key: 0x41 + the same 20 bytes as the EVM address."""
     return str(base58.b58encode_check(b"\x41" + bytes.fromhex(account.address[2:])).decode())
+
+
+class SigningService(Protocol):
+    """What the payout workers need: the in-process :class:`Signer` or the remote one."""
+
+    def has_key(self, address: str) -> bool: ...
+
+    async def sign_evm_transfer(
+        self, session: AsyncSession, payout_id: int, *, from_address: str, nonce: int, fees: EvmFees
+    ) -> SignedTx: ...
+
+    async def sign_tron_transfer(
+        self,
+        session: AsyncSession,
+        payout_id: int,
+        *,
+        from_address: str,
+        ref: RefBlock,
+        now_ms: int,
+        fee_limit_sun: int,
+    ) -> SignedTx: ...

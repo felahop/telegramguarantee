@@ -22,7 +22,8 @@ from app.chains.watcher import ChainWatcher, run_watcher
 from app.config import get_settings
 from app.logging import configure_logging, get_logger
 from app.runtime import build_runtime
-from app.signer.signer import Signer
+from app.signer.remote import RemoteSigner
+from app.signer.signer import Signer, SigningService
 from app.worker.cryptobot import run_payouts, run_poller
 from app.worker.onchain_payouts import EvmPayouts, OnchainPayouts, TronPayouts, run_onchain_payouts
 from app.worker.outbox import OutboxSender
@@ -32,10 +33,21 @@ from app.worker.timers import run_timers
 log = get_logger(__name__)
 
 
+async def _signer(ctx: BotContext) -> SigningService:
+    settings = ctx.settings
+    if settings.signer_url:
+        remote = RemoteSigner(settings.signer_url, settings.signer_api_secret.get_secret_value().encode())
+        await remote.load()  # which hot wallets it holds; fails loudly if the secret is wrong
+        return remote
+    if settings.environment == "prod":
+        log.warning("signer_in_process", hint="run python -m app.signer separately and set SIGNER_URL")
+    return Signer.from_keystore(settings, ctx.chains, clock=ctx.clock)
+
+
 async def _chain_jobs(ctx: BotContext, stop: asyncio.Event) -> list[Coroutine[Any, Any, None]]:
     """A watcher per enabled network, and a payout executor where the signer holds the hot wallet."""
     settings = ctx.settings
-    signer = Signer.from_keystore(settings, ctx.chains, clock=ctx.clock) if ctx.chain_adapters else None
+    signer = await _signer(ctx) if ctx.chain_adapters else None
     jobs: list[Coroutine[Any, Any, None]] = []
     for network, adapter in ctx.chain_adapters.items():
         executor: OnchainPayouts | None = None

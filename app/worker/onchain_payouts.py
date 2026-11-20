@@ -37,7 +37,7 @@ from app.services import notifications
 from app.services.deals import DealService
 from app.services.ledger import AccountRef, Ledger
 from app.services.notifications import Notice
-from app.signer.signer import EvmFees, SignedTx, Signer, SignerRefused
+from app.signer.signer import EvmFees, SignedTx, SignerRefused, SigningService
 
 log = get_logger(__name__)
 
@@ -60,7 +60,7 @@ class Outcome:
 class OnchainPayouts:
     """The network-independent part; subclasses sign, price gas and read outcomes."""
 
-    def __init__(self, ctx: BotContext, adapter: Any, signer: Signer) -> None:
+    def __init__(self, ctx: BotContext, adapter: Any, signer: SigningService) -> None:
         self._ctx = ctx
         self._adapter = adapter
         self._signer = signer
@@ -307,7 +307,9 @@ class OnchainPayouts:
                 )
                 .order_by(Payout.id)
                 .limit(1)
-                .with_for_update(skip_locked=True)
+                # NO KEY UPDATE: we change no key columns, and the signer's log row references this
+                # payout — a plain FOR UPDATE would block that foreign-key check while we wait for it.
+                .with_for_update(skip_locked=True, key_share=True)
             )
         ).scalar_one_or_none()
 

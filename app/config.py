@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     # On-chain signer: Ethereum keystore v3 JSON files (one per hot wallet, also used for TRON keys)
     # in SIGNER_KEYSTORE_DIR, decrypted at start with SIGNER_PASSWORD (a Docker secret in prod).
     signer_keystore_dir: str = ""
+    # Separate signer process (docs §9.2): the worker calls it at SIGNER_URL, requests signed with
+    # SIGNER_API_SECRET (HMAC). Empty URL = in-process signer (development only).
+    signer_url: str = ""
+    signer_api_secret: SecretStr = SecretStr("")
     signer_password: SecretStr = SecretStr("")
     signer_max_payout_usdt: Decimal = Decimal("5000")  # per transaction, enforced by the signer itself
     signer_daily_limit_usdt: Decimal = Decimal("20000")  # all networks, rolling 24 h

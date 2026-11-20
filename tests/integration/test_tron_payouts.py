@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
@@ -23,7 +23,7 @@ from app.signer.signer import Signer, tron_address
 from app.worker.onchain_payouts import TronPayouts
 from tests.chains_fake import FakeTronNode, _proto, routing_transport
 from tests.integration.chain_world import OC, usdt
-from tests.integration.deal_world import BUYER, SELLER, SELLER_ADDRESSES
+from tests.integration.deal_world import BUYER, SELLER, SELLER_ADDRESSES, Clock
 
 TRON = Network.TRON
 U = 10**6
@@ -192,3 +192,30 @@ async def test_not_enough_trx_for_energy_waits(tp: TronPay) -> None:
     await tp.executor.sign_next()
     assert ((await tp.payouts())[0].last_error or "").startswith("no_gas")
     assert await tp.attempts() == []
+
+
+async def test_tron_is_signed_again_only_after_expiry(tp: TronPay) -> None:
+    from app.chains.tron_tx import RefBlock  # noqa: PLC0415
+    from app.signer.signer import SignerRefused  # noqa: PLC0415
+
+    await tp.confirmed_deal()
+    [payout] = await tp.payouts()
+    ref = RefBlock(number=1, block_id="00" * 32)
+    now_ms = 1_800_000_000_000
+    expires = datetime.fromtimestamp((now_ms + 600_000) / 1000, tz=UTC)
+    clock = Clock(expires - timedelta(minutes=5))
+    signer = Signer({HOT: ACCOUNT}, tp.oc.ctx.settings, tp.oc.ctx.chains, clock=clock)
+    async with tp.oc.ctx.sessionmaker() as s, s.begin():
+        await signer.sign_tron_transfer(
+            s, payout.id, from_address=HOT, ref=ref, now_ms=now_ms, fee_limit_sun=1
+        )
+    with pytest.raises(SignerRefused, match="already signed"):
+        async with tp.oc.ctx.sessionmaker() as s, s.begin():
+            await signer.sign_tron_transfer(
+                s, payout.id, from_address=HOT, ref=ref, now_ms=now_ms, fee_limit_sun=1
+            )
+    clock.now = expires + timedelta(minutes=3)  # the first one can no longer be included
+    async with tp.oc.ctx.sessionmaker() as s, s.begin():
+        await signer.sign_tron_transfer(
+            s, payout.id, from_address=HOT, ref=ref, now_ms=now_ms + 1, fee_limit_sun=1
+        )

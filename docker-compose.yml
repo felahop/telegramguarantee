@@ -1,4 +1,5 @@
-# Services are added as modules land: watcher (chain deposits) and signer (hot keys) come later.
+# The signer holds the hot-wallet keys: it lives only on the internal network (no internet access)
+# and is reached by the worker with HMAC-signed requests.
 name: escrow
 
 x-app: &app
@@ -18,6 +19,7 @@ x-app: &app
 services:
   postgres:
     image: postgres:16-alpine
+    networks: [default, internal]
     environment:
       POSTGRES_DB: escrow
       POSTGRES_USER: escrow
@@ -70,8 +72,11 @@ services:
 
   worker:
     <<: *app
-    # Outbox notifications, deal timers (and, as modules land, payment polling and payouts).
+    # Outbox notifications, deal timers, CryptoBot, ChainWatchers, on-chain payouts, reconciliation.
     command: ["python", "-m", "app.worker"]
+    environment:
+      SIGNER_URL: http://signer:8090
+    networks: [default, internal]
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +84,25 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  signer:
+    <<: *app
+    command: ["python", "-m", "app.signer"]
+    networks: [internal]  # no route to the internet: keys cannot be sent anywhere from here
+    volumes:
+      - ./chains.yaml:/app/chains.yaml:ro
+      - ./secrets/keystore:/app/secrets/keystore:ro
+    environment:
+      SIGNER_KEYSTORE_DIR: /app/secrets/keystore
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+networks:
+  internal:
+    internal: true
 
 volumes:
   pgdata:
