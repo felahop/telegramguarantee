@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     dispute_payout_requires_approval: bool = False
     hot_wallet_limit_usdt: Decimal = Decimal("10000")
 
+    # Admin security: money actions of admins/arbitrators need a TOTP code (authenticator app).
+    admin_totp_required: bool = True
+    # Fernet key (base64, 32 bytes) encrypting TOTP secrets at rest. Generate with:
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    secrets_encryption_key: SecretStr = SecretStr("")
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def _parse_admin_ids(cls, value: Any) -> Any:

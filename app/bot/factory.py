@@ -10,7 +10,18 @@ from aiogram.fsm.storage.base import BaseStorage
 
 from app.bot.context import BotContext
 from app.bot.errors import on_error
-from app.bot.handlers import chat, commands, deal_card, execution, fallback, inline, payment, start, wizard
+from app.bot.handlers import (
+    admin,
+    chat,
+    commands,
+    deal_card,
+    execution,
+    fallback,
+    inline,
+    payment,
+    start,
+    wizard,
+)
 from app.bot.middlewares import DedupeMiddleware, ThrottleMiddleware, UserMiddleware
 from app.config import Settings
 
@@ -33,6 +44,7 @@ def build_dispatcher(
     # Order matters: commands work in any wizard state; the fallback router goes last.
     dp.include_routers(
         start.build_router(),
+        admin.build_router(),
         commands.build_router(),
         inline.build_router(),
         execution.build_router(),  # before deal_card: «Отмена» (VIEW) inside its prompts clears the state

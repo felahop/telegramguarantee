@@ -44,6 +44,7 @@ class Notice(StrEnum):
     DISPUTE_OPENED = "dispute_opened"
     DISPUTE_WITHDRAWN = "dispute_withdrawn"
     DISPUTE_RESOLVED = "dispute_resolved"
+    DISPUTE_IN_REVIEW = "dispute_in_review"
     PAYOUT_ACTION_NEEDED = "payout_action_needed"  # e.g. the recipient never opened @CryptoBot
     INLINE_CARD = "inline_card"  # edit the inline-mode card the creator posted in a chat
     ADMIN_DISPUTE_OPENED = "admin_dispute_opened"

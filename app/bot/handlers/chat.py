@@ -6,6 +6,9 @@ right away when the other side cannot receive messages.
 
 from __future__ import annotations
 
+import contextlib
+
+import sqlalchemy as sa
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
@@ -19,8 +22,8 @@ from app.bot.chat_filters import scan
 from app.bot.context import BotContext
 from app.bot.keyboards import CHAT_STATUSES
 from app.bot.texts import esc
-from app.db.models import Deal, DealMessage, User
-from app.domain.enums import PartyRole
+from app.db.models import Deal, DealMessage, Dispute, User
+from app.domain.enums import OPEN_DISPUTE_STATUSES, DealStatus, PartyRole
 from app.domain.errors import Forbidden, InvalidTransition
 
 SENDER = {PartyRole.BUYER: "покупателя", PartyRole.SELLER: "продавца"}
@@ -121,8 +124,26 @@ async def on_chat_message(message: Message, ctx: BotContext, user: User, state: 
             "Сообщение сохранено в истории сделки."
         )
         return
+    await _copy_to_arbiter(bot, ctx, deal, message, header)
     if flags:
         await message.answer("Доставлено. ⚠️ Напоминаем: платите только через бота, не по реквизитам из чата.")
+
+
+async def _copy_to_arbiter(bot: Bot, ctx: BotContext, deal: Deal, message: Message, header: str) -> None:
+    """While a dispute is in review the arbitrator sees the parties' messages as they come."""
+    if deal.status is not DealStatus.DISPUTED:
+        return
+    async with ctx.uow() as uow:
+        arbiter_id = await uow.session.scalar(
+            sa.select(Dispute.arbitrator_id).where(
+                Dispute.deal_id == deal.id, Dispute.status.in_(list(OPEN_DISPUTE_STATUSES))
+            )
+        )
+    if arbiter_id is None:
+        return
+    text = message.text if message.text is not None else f"[{_file(message)[1]}] {message.caption or ''}"
+    with contextlib.suppress(TelegramForbiddenError, TelegramBadRequest):
+        await bot.send_message(arbiter_id, f"🗂 Копия для арбитра. {header}\n\n{esc(text)}")
 
 
 async def on_chat_close(message: Message, state: FSMContext) -> None:

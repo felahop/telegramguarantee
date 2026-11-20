@@ -138,6 +138,9 @@ _NATIVE_COINS = {
 }
 
 
+NATIVE_DECIMALS = {"BNB": 18, "ETH": 18, "TRX": 6, "TON": 9, "SOL": 9}
+
+
 def native_asset_code(network: Network | str) -> str:
     """Ledger code of the coin that pays gas on a network (network fees are spent in it, not in USDT)."""
     net = Network(network)

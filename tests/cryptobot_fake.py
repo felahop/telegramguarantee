@@ -82,7 +82,7 @@ class FakeCryptoPay:
     def _deleteInvoice(self, p: dict[str, Any]) -> bool:
         invoice = self.invoices[int(p["invoice_id"])]
         if invoice["status"] == "paid":
-            raise AssertionError("tests never delete paid invoices")
+            raise _ApiError("INVOICE_ALREADY_PAID")  # a paid invoice cannot be deleted
         invoice["status"] = "deleted"
         return True
 

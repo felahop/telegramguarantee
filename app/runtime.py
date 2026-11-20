@@ -57,6 +57,7 @@ async def build_runtime(settings: Settings) -> Runtime:
         cryptopay = CryptoPayClient(settings.cryptobot_api_token, testnet=settings.cryptobot_testnet)
         gateways[Network.CRYPTOBOT] = CryptoBotGateway(cryptopay, settings, ctx.chains, clock=ctx.clock)
     ctx.gateway = RoutingGateway(gateways)
+    ctx.cryptopay = cryptopay
     async with sessionmaker() as session, session.begin():
         await ensure_admins(session, settings.admin_ids)
     return Runtime(

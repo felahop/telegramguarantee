@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.bot.storage import KeyValueStore
 from app.config import AssetSpec, ChainsConfig, Settings
 from app.domain.enums import Network
+from app.providers.cryptobot.client import CryptoPayClient
 from app.services.deals import DealService, PaymentGateway, utcnow
 
 
@@ -29,6 +30,7 @@ class BotContext:
     kv: KeyValueStore
     clock: Callable[[], datetime] = field(default=utcnow)
     gateway: PaymentGateway | None = None
+    cryptopay: CryptoPayClient | None = None  # for live balances in the admin panel
 
     @asynccontextmanager
     async def uow(self) -> AsyncIterator[UnitOfWork]:

@@ -19,6 +19,7 @@ from app.db.base import Base
 from tests import addresses
 
 ROOT = Path(__file__).resolve().parent.parent
+TEST_FERNET_KEY = "ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg="  # test-only Fernet key
 
 
 @pytest.fixture(scope="session")
@@ -50,6 +51,8 @@ def settings() -> Settings:
         deal_max_usdt=Decimal("10000"),
         new_user_deal_max_usdt=Decimal("300"),
         manual_approval_threshold_usdt=Decimal("2000"),
+        admin_totp_required=True,
+        secrets_encryption_key=TEST_FERNET_KEY,
         offer_ttl=timedelta(hours=24),
         payment_ttl=timedelta(minutes=30),
     )

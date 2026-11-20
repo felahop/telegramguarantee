@@ -186,5 +186,8 @@ async def test_every_notice_renders(
     assert rendered.text
     assert "<b>x</b>" not in rendered.text  # payload text is escaped
     if kind in ADMIN_NOTICES:
-        assert rendered.markup is None  # admins get the admin panel, not party buttons
+        # admins get a button into the admin panel, never the parties' action buttons
+        assert rendered.markup is not None
+        [[button]] = rendered.markup.inline_keyboard
+        assert button.callback_data is not None and button.callback_data.startswith("a:")
         assert deal.code in rendered.text

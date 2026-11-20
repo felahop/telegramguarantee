@@ -18,6 +18,8 @@ dependencies = [
     "base58>=2.1",
     "eth-utils>=5.1",
     "eth-hash[pycryptodome]>=0.7",
+    "pyotp>=2.9",
+    "cryptography>=43",
 ]
 
 [dependency-groups]

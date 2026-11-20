@@ -28,6 +28,7 @@ class User(Base):
     volume_usdt: Mapped[int] = mapped_column(MinorAmount, server_default="0")  # micro-USDT (6 dp)
     limit_tier: Mapped[int] = mapped_column(sa.SmallInteger, server_default="0")
     totp_secret_enc: Mapped[bytes | None] = mapped_column(sa.LargeBinary)
+    totp_confirmed_at: Mapped[datetime | None]  # NULL while enrollment is pending
     created_at: Mapped[datetime] = created_at_column()
     last_seen_at: Mapped[datetime] = created_at_column()
     # Set on /start: only users who started the bot can receive messages from it.

@@ -10,10 +10,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts as T
+from app.bot.admin_keyboards import AdmAct, AdmCb
 from app.bot.context import BotContext
 from app.bot.render import PartyInfo
 from app.bot.texts import esc
@@ -159,6 +160,10 @@ HEADLINES: dict[Notice, Headline] = {
     Notice.DISPUTE_OPENED: _dispute_opened,
     Notice.DISPUTE_WITHDRAWN: lambda d, u, p, us: "Спор отозван, сделка продолжается.",
     Notice.DISPUTE_RESOLVED: _resolved,
+    Notice.DISPUTE_IN_REVIEW: lambda d, u, p, us: (
+        "⚖️ <b>Арбитр взял спор в работу.</b> Он может написать вам через бота; отвечайте в чате сделки — "
+        "арбитр видит переписку."
+    ),
     Notice.PAYOUT_ACTION_NEEDED: lambda d, u, p, us: (
         f"⚠️ <b>Не удаётся отправить выплату.</b> {esc(str(p.get('hint', 'Обратитесь в поддержку.')))}"
     ),
@@ -200,7 +205,7 @@ async def render_notice(
         details = {k: v for k, v in payload.items() if k not in ("status", "code")}
         if details:
             lines.append(esc(", ".join(f"{k}: {v}" for k, v in details.items())))
-        return RenderedNotice(text="\n".join(lines))
+        return RenderedNotice(text="\n".join(lines), markup=_admin_button(kind, deal, payload))
 
     if deal is None:
         return None
@@ -208,6 +213,20 @@ async def render_notice(
     headline = HEADLINES[kind](deal, row.user_id, payload, users)
     text, markup = await deal_view(ctx, session, deal, row.user_id)
     return RenderedNotice(text=f"{headline}\n\n{text}", markup=markup)
+
+
+def _admin_button(kind: Notice, deal: Deal | None, payload: dict[str, Any]) -> InlineKeyboardMarkup:
+    if kind in (Notice.ADMIN_PAYOUT_APPROVAL, Notice.ADMIN_PAYOUT_FAILED) and payload.get("payout_id"):
+        target = AdmCb(a=AdmAct.PAYOUT, id=int(payload["payout_id"]))
+    elif kind in (Notice.ADMIN_DISPUTE_OPENED, Notice.ADMIN_DISPUTE_SLA) and deal is not None:
+        target = AdmCb(a=AdmAct.DISPUTE, id=deal.id)
+    elif kind is Notice.ADMIN_PAYMENT_ANOMALY:
+        target = AdmCb(a=AdmAct.UNIDENTIFIED)
+    else:
+        target = AdmCb(a=AdmAct.MENU)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🛠 Открыть в админке", callback_data=target.pack())]]
+    )
 
 
 def _mentioned(payload: dict[str, Any]) -> list[int]:
