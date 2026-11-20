@@ -17,6 +17,7 @@ import base58
 
 from app.chains.base import ChainHead, ChainUnavailable, ObservedTransfer
 from app.chains.pool import EndpointPool
+from app.chains.tron_tx import RefBlock
 from app.config import NetworkConfig
 from app.domain.enums import Network
 from app.logging import get_logger
@@ -170,6 +171,58 @@ class TronAdapter:
         if not values:
             raise ChainUnavailable("balanceOf returned nothing")
         return int(values[0], 16)
+
+    # ── outgoing (used by the payout worker) ──────────────────────────────
+    async def ref_block(self) -> RefBlock:
+        """The solidified block as the reference block: it cannot be reorganized away."""
+        block = await self._primary.post("/walletsolidity/getnowblock", {})
+        return RefBlock(
+            number=int(block["block_header"]["raw_data"]["number"]), block_id=str(block["blockID"])
+        )
+
+    async def chain_time_ms(self) -> int:
+        return _block_ts(await self._primary.post("/wallet/getnowblock", {}))
+
+    async def solid_time_ms(self) -> int:
+        """The older of both sources' solidified heads (expiry is judged conservatively)."""
+        a = _block_ts(await self._primary.post("/walletsolidity/getnowblock", {}))
+        b = _block_ts(await self._verifier.post("/walletsolidity/getnowblock", {}))
+        return min(a, b)
+
+    async def native_balance(self, address: str) -> int:
+        account = await self._primary.post("/wallet/getaccount", {"address": address, "visible": True})
+        return int((account or {}).get("balance") or 0)
+
+    async def broadcast(self, raw: bytes) -> bool:
+        accepted = False
+        for pool in (self._primary, self._verifier):
+            for endpoint in pool.endpoints:
+                try:
+                    result = await pool.post_at(endpoint, "/wallet/broadcasthex", {"transaction": raw.hex()})
+                except Exception as exc:
+                    log.warning("tron_broadcast_failed", endpoint=endpoint.name, error=type(exc).__name__)
+                    continue
+                if result.get("result") or result.get("code") == "DUP_TRANSACTION_ERROR":
+                    accepted = True
+                else:
+                    log.warning("tron_broadcast_rejected", endpoint=endpoint.name, code=result.get("code"))
+        return accepted
+
+    async def tx_info(self, tx_hash: str, *, second_source: bool = False) -> dict[str, Any] | None:
+        pool = self._verifier if second_source else self._primary
+        info = await pool.post("/walletsolidity/gettransactioninfobyid", {"value": tx_hash})
+        return info or None
+
+    def transfer_in_info(self, info: dict[str, Any], *, to: str, amount: int) -> bool:
+        recipient = tron_hex(to)
+        return any(
+            str(entry.get("address", "")).lower().removeprefix("41")[-40:] == self._contract_hex
+            and len(entry.get("topics") or []) == 3
+            and str(entry["topics"][0]).lower() == TRANSFER_TOPIC
+            and str(entry["topics"][2]).lower()[-40:] == recipient
+            and int(entry.get("data") or "0", 16) == amount
+            for entry in info.get("log") or []
+        )
 
     async def close(self) -> None:
         await self._primary.close()

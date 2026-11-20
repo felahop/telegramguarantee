@@ -164,8 +164,47 @@ class FakeTronNode:
     balances: dict[str, int] = field(default_factory=dict)
     page_size: int = 200
     requests: list[httpx.Request] = field(default_factory=list)
+    trx: dict[str, int] = field(default_factory=dict)  # address → sun
+    sent: dict[str, bytes] = field(default_factory=dict)  # txid → raw_data, broadcast but not solidified
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    def _broadcast(self, tx_hex: str) -> dict[str, Any]:
+        import hashlib  # noqa: PLC0415
+
+        fields = _proto(bytes.fromhex(tx_hex))
+        raw = fields[1][0]
+        txid = hashlib.sha256(raw).hexdigest()
+        if txid in self.sent or txid in self.infos:
+            return {"result": False, "code": "DUP_TRANSACTION_ERROR"}
+        assert len(fields[2][0]) == 65  # r, s, v
+        self.sent[txid] = raw
+        return {"result": True, "txid": txid}
+
+    def solidify(self, txid: str, *, result: str = "SUCCESS", fee: int = 13_000_000) -> dict[str, Any]:
+        """Include a broadcast transaction in a solidified block; returns what it transferred."""
+        from app.chains.adapters.tron import TRANSFER_TOPIC  # noqa: PLC0415
+
+        raw = self.sent.pop(txid)
+        contract = _proto(_proto(_proto(_proto(raw)[11][0])[2][0])[2][0])
+        data = contract[4][0]
+        recipient, amount = data[16:36].hex(), int.from_bytes(data[36:68], "big")
+        token = contract[2][0][1:].hex()
+        logs = [
+            {
+                "address": token,
+                "topics": [TRANSFER_TOPIC, "0" * 64, "0" * 24 + recipient],
+                "data": f"{amount:064x}",
+            }
+        ]
+        self.infos[txid] = {
+            "id": txid,
+            "blockTimeStamp": self.solid_ts,
+            "fee": fee,
+            "receipt": {"result": result},
+            "log": logs if result == "SUCCESS" else [],
+        }
+        return {"recipient": recipient, "amount": amount}
+
+    def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - a router
         self.requests.append(request)
         path = request.url.path
         if path == "/wallet/getnowblock":
@@ -174,6 +213,11 @@ class FakeTronNode:
             return httpx.Response(200, json=_tron_block(self.solid_ts))
         if path == "/walletsolidity/gettransactioninfobyid":
             return httpx.Response(200, json=self.infos.get(json.loads(request.content)["value"], {}))
+        if path == "/wallet/getaccount":
+            body = json.loads(request.content)
+            return httpx.Response(200, json={"balance": self.trx.get(body["address"], 0)})
+        if path == "/wallet/broadcasthex":
+            return httpx.Response(200, json=self._broadcast(json.loads(request.content)["transaction"]))
         if path == "/wallet/triggerconstantcontract":
             body = json.loads(request.content)
             return httpx.Response(
@@ -233,7 +277,39 @@ class FakeTronNode:
 
 
 def _tron_block(ts: int) -> dict[str, Any]:
-    return {"blockID": "00", "block_header": {"raw_data": {"number": ts // 3000, "timestamp": ts}}}
+    number = ts // 3000
+    block_id = number.to_bytes(8, "big").hex() + "ab" * 24
+    return {"blockID": block_id, "block_header": {"raw_data": {"number": number, "timestamp": ts}}}
+
+
+def _proto(data: bytes) -> dict[int, list[Any]]:
+    """Minimal protobuf reader for the fake node: varint and length-delimited fields."""
+    out: dict[int, list[Any]] = defaultdict(list)
+    i = 0
+
+    def varint() -> int:
+        nonlocal i
+        shift = value = 0
+        while True:
+            byte = data[i]
+            i += 1
+            value |= (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                return value
+
+    while i < len(data):
+        key = varint()
+        field_no, wire = key >> 3, key & 7
+        if wire == 0:
+            out[field_no].append(varint())
+        elif wire == 2:
+            length = varint()
+            out[field_no].append(data[i : i + length])
+            i += length
+        else:
+            raise ValueError(f"unsupported wire type {wire}")
+    return out
 
 
 @dataclass

@@ -143,6 +143,13 @@ class EndpointPool:
             raise RpcError(err.get("code"), str(err.get("message", err)))
         return body.get("result")
 
+    async def post_at(self, endpoint: RpcEndpoint, path: str, payload: Mapping[str, Any]) -> Any:
+        response = await self._clients[endpoint.name].post(
+            endpoint.url.rstrip("/") + path, json=dict(payload)
+        )
+        _raise_for_status(response)
+        return response.json()
+
     async def get(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
         async def op(client: httpx.AsyncClient, ep: RpcEndpoint) -> Any:
             response = await client.get(ep.url.rstrip("/") + path, params=params)

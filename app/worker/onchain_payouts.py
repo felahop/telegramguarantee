@@ -1,4 +1,4 @@
-"""On-chain payouts for EVM networks (BEP-20, ERC-20), docs §9.1.
+"""On-chain payouts: EVM networks (BEP-20, ERC-20) and TRC-20, docs §9.1.
 
 Three steps, each its own short DB transaction, so a crash anywhere is safe:
 
@@ -19,24 +19,25 @@ A transaction that does not appear is re-broadcast; after ``STUCK_ALERT_AFTER`` 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any, Literal
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.context import BotContext
-from app.chains.adapters.evm import EvmAdapter
 from app.db.models import HotWallet, Payout, PayoutAttempt, PayoutPause
 from app.domain.enums import Network, PayoutAttemptStatus, PayoutKind, PayoutStatus, Provider
-from app.domain.money import asset_code, native_asset_code
+from app.domain.money import asset_code, native_asset_code, to_minor
 from app.logging import get_logger
 from app.services import ledger as postings
 from app.services import notifications
 from app.services.deals import DealService
 from app.services.ledger import AccountRef, Ledger
 from app.services.notifications import Notice
-from app.signer.signer import EvmFees, Signer, SignerRefused
+from app.signer.signer import EvmFees, SignedTx, Signer, SignerRefused
 
 log = get_logger(__name__)
 
@@ -47,10 +48,19 @@ FUNDS_RETRY = timedelta(minutes=10)
 STUCK_ALERT_AFTER = timedelta(minutes=30)
 IDLE_SECONDS = 5.0
 IN_FLIGHT = (PayoutStatus.SIGNING, PayoutStatus.BROADCAST)
+EXPIRY_MARGIN_MS = 2 * 60 * 1000  # TRON: re-sign only this long after the old transaction expired
 
 
-class EvmPayouts:
-    def __init__(self, ctx: BotContext, adapter: EvmAdapter, signer: Signer) -> None:
+@dataclass(frozen=True)
+class Outcome:
+    state: Literal["pending", "missing", "expired", "ok", "failed"]
+    fee: int = 0  # native coin actually spent (gas / burnt TRX)
+
+
+class OnchainPayouts:
+    """The network-independent part; subclasses sign, price gas and read outcomes."""
+
+    def __init__(self, ctx: BotContext, adapter: Any, signer: Signer) -> None:
         self._ctx = ctx
         self._adapter = adapter
         self._signer = signer
@@ -78,17 +88,11 @@ class EvmPayouts:
                 await self._fail(s, payout, now, kind, text, final=final)
                 return True
             wallet = await self._hot_wallet(s)
-            fees = await self._fees()
-            nonce = wallet.next_nonce
-            assert nonce is not None  # noqa: S101 - initialized by _hot_wallet
             try:
-                signed = await self._signer.sign_evm_transfer(
-                    s, payout.id, from_address=self._hot, nonce=nonce, fees=fees
-                )
+                signed = await self._sign(s, payout, wallet)
             except SignerRefused as exc:
                 await self._fail(s, payout, now, "signer", exc.message, final=True)
                 return True
-            wallet.next_nonce = nonce + 1
             attempt_no = int(
                 await s.scalar(
                     sa.select(sa.func.coalesce(sa.func.max(PayoutAttempt.attempt_no), 0)).where(
@@ -104,6 +108,7 @@ class EvmPayouts:
                     tx_hash=signed.tx_hash,
                     raw_tx=signed.raw,
                     nonce=signed.nonce,
+                    valid_until=signed.valid_until,
                     status=PayoutAttemptStatus.SIGNED,
                 )
             )
@@ -133,10 +138,21 @@ class EvmPayouts:
         )
         if await self._adapter.token_balance(self._hot) < payout.amount + in_flight:
             return ("insufficient_funds", "the hot wallet holds less USDT than the payout", False)
-        gas_cost = GAS_LIMIT * await self._adapter.gas_price()
-        if await self._adapter.native_balance(self._hot) < gas_cost:
+        if await self._adapter.native_balance(self._hot) < await self._gas_needed():
             return ("no_gas", f"the hot wallet needs {self._native} for gas", False)
         return None
+
+    async def _sign(self, s: AsyncSession, payout: Payout, wallet: HotWallet) -> SignedTx:
+        raise NotImplementedError
+
+    async def _gas_needed(self) -> int:
+        raise NotImplementedError
+
+    async def _init_wallet(self, wallet: HotWallet) -> None:
+        return None
+
+    async def _outcome(self, s: AsyncSession, payout: Payout, attempt: PayoutAttempt) -> Outcome:
+        raise NotImplementedError
 
     async def _fees(self) -> EvmFees:
         if self.network is Network.ETH:
@@ -157,8 +173,7 @@ class EvmPayouts:
                 .with_for_update()
             )
         ).scalar_one()
-        if wallet.next_nonce is None:
-            wallet.next_nonce = await self._adapter.nonce(self._hot)
+        await self._init_wallet(wallet)
         return wallet
 
     # ── 2. broadcast ───────────────────────────────────────────────────────
@@ -176,7 +191,7 @@ class EvmPayouts:
                 attempt.status = PayoutAttemptStatus.BROADCAST
                 payout.status = PayoutStatus.BROADCAST
                 payout.next_attempt_at = now + TRACK_EVERY
-                log.info("evm_payout_broadcast", payout_id=payout.id, tx_hash=attempt.tx_hash)
+                log.info("onchain_payout_broadcast", payout_id=payout.id, tx_hash=attempt.tx_hash)
             else:
                 payout.last_error = "broadcast: no endpoint accepted the transaction (will resend it)"
                 payout.next_attempt_at = now + BROADCAST_RETRY
@@ -192,29 +207,24 @@ class EvmPayouts:
             attempt = await self._latest_attempt(s, payout)
             assert attempt is not None and attempt.tx_hash is not None  # noqa: S101 - broadcast implies it
             payout.next_attempt_at = now + TRACK_EVERY
-            receipt = await self._adapter.receipt(attempt.tx_hash)
-            if receipt is None:
+            outcome = await self._outcome(s, payout, attempt)
+            if outcome.state == "pending":
+                return True
+            if outcome.state == "missing":
                 await self._not_mined(s, payout, attempt, now)
                 return True
-            block = int(receipt["blockNumber"], 16)
-            if block > await self._adapter.final_head():
+            if outcome.state == "expired":
+                # Provably dead (past its expiry, unknown to both sources): safe to sign anew.
+                attempt.status = PayoutAttemptStatus.EXPIRED
+                payout.status = PayoutStatus.QUEUED
+                payout.next_attempt_at = now
+                payout.last_error = f"expired: {attempt.tx_hash} never landed, signing again"
+                log.warning("onchain_payout_expired", payout_id=payout.id, tx_hash=attempt.tx_hash)
                 return True
-            second = await self._adapter.receipt(attempt.tx_hash, second_source=True)
-            if (
-                second is None
-                or int(second["blockNumber"], 16) > await self._adapter.final_head(second_source=True)
-                or str(second.get("blockHash")).lower() != str(receipt.get("blockHash")).lower()
-                or second.get("status") != receipt.get("status")
-            ):
-                return True  # the second source has not caught up (or disagrees): wait, never guess
-            gas = int(receipt.get("gasUsed", "0x0"), 16) * int(receipt.get("effectiveGasPrice", "0x0"), 16)
-            if gas:
-                await self._book_gas(s, attempt, gas)
-            payout.native_fee_spent = gas
-            ok = receipt.get("status") == "0x1" and self._adapter.transfer_in_receipt(
-                receipt, to=payout.recipient_address or "", amount=payout.amount
-            )
-            if ok:
+            if outcome.fee:
+                await self._book_gas(s, attempt, outcome.fee)
+            payout.native_fee_spent = outcome.fee
+            if outcome.state == "ok":
                 await self._settle(s, payout, attempt, now)
             else:
                 attempt.status = PayoutAttemptStatus.REVERTED
@@ -228,7 +238,9 @@ class EvmPayouts:
     ) -> None:
         if attempt.raw_tx is not None:
             await self._adapter.broadcast(attempt.raw_tx)  # same bytes: harmless if it is already pending
-        age = await s.scalar(sa.select(sa.func.now() - attempt.created_at))
+        age = await s.scalar(
+            sa.select(sa.func.now() - PayoutAttempt.created_at).where(PayoutAttempt.id == attempt.id)
+        )
         if isinstance(age, timedelta) and age > STUCK_ALERT_AFTER:
             await self._alert(
                 s, payout, now, f"transaction {attempt.tx_hash} is not mined for {age}", "stuck"
@@ -257,7 +269,7 @@ class EvmPayouts:
             ref_id=payout.id,
             postings=entries,
         )
-        log.info("evm_payout_confirmed", payout_id=payout.id, tx_hash=attempt.tx_hash)
+        log.info("onchain_payout_confirmed", payout_id=payout.id, tx_hash=attempt.tx_hash)
         if payout.deal_id is not None:
             await DealService(
                 s, self._ctx.settings, self._ctx.chains, gateway=self._ctx.gateway, clock=self._ctx.clock
@@ -338,7 +350,89 @@ class EvmPayouts:
             )
 
 
-async def run_evm_payouts(executor: EvmPayouts, stop: asyncio.Event) -> None:
+class EvmPayouts(OnchainPayouts):
+    async def _init_wallet(self, wallet: HotWallet) -> None:
+        if wallet.next_nonce is None:
+            wallet.next_nonce = await self._adapter.nonce(self._hot)
+
+    async def _gas_needed(self) -> int:
+        return GAS_LIMIT * int(await self._adapter.gas_price())
+
+    async def _sign(self, s: AsyncSession, payout: Payout, wallet: HotWallet) -> SignedTx:
+        nonce = wallet.next_nonce
+        assert nonce is not None  # noqa: S101 - initialized by _init_wallet
+        signed = await self._signer.sign_evm_transfer(
+            s, payout.id, from_address=self._hot, nonce=nonce, fees=await self._fees()
+        )
+        wallet.next_nonce = nonce + 1  # spent even if the transaction later reverts
+        return signed
+
+    async def _outcome(self, s: AsyncSession, payout: Payout, attempt: PayoutAttempt) -> Outcome:
+        assert attempt.tx_hash is not None  # noqa: S101
+        receipt = await self._adapter.receipt(attempt.tx_hash)
+        if receipt is None:
+            return Outcome("missing")
+        if int(receipt["blockNumber"], 16) > await self._adapter.final_head():
+            return Outcome("pending")
+        second = await self._adapter.receipt(attempt.tx_hash, second_source=True)
+        if (
+            second is None
+            or int(second["blockNumber"], 16) > await self._adapter.final_head(second_source=True)
+            or str(second.get("blockHash")).lower() != str(receipt.get("blockHash")).lower()
+            or second.get("status") != receipt.get("status")
+        ):
+            return Outcome("pending")  # the second source has not caught up (or disagrees): never guess
+        fee = int(receipt.get("gasUsed", "0x0"), 16) * int(receipt.get("effectiveGasPrice", "0x0"), 16)
+        ok = receipt.get("status") == "0x1" and self._adapter.transfer_in_receipt(
+            receipt, to=payout.recipient_address or "", amount=payout.amount
+        )
+        return Outcome("ok" if ok else "failed", fee)
+
+
+class TronPayouts(OnchainPayouts):
+    """No nonces on TRON: a transaction carries an expiration (10 min). It is signed again only once
+    the solidified head is past that expiration plus a margin and both sources do not know it."""
+
+    async def _gas_needed(self) -> int:
+        return self._fee_limit
+
+    @property
+    def _fee_limit(self) -> int:
+        return to_minor(self._ctx.settings.tron_fee_limit_trx, 6)
+
+    async def _sign(self, s: AsyncSession, payout: Payout, wallet: HotWallet) -> SignedTx:
+        ref = await self._adapter.ref_block()
+        return await self._signer.sign_tron_transfer(
+            s,
+            payout.id,
+            from_address=self._hot,
+            ref=ref,
+            now_ms=await self._adapter.chain_time_ms(),
+            fee_limit_sun=self._fee_limit,
+        )
+
+    async def _outcome(self, s: AsyncSession, payout: Payout, attempt: PayoutAttempt) -> Outcome:
+        assert attempt.tx_hash is not None  # noqa: S101
+        info = await self._adapter.tx_info(attempt.tx_hash)
+        second = await self._adapter.tx_info(attempt.tx_hash, second_source=True)
+        if not info or not second:
+            if info or second:
+                return Outcome("pending")  # solidified at one source only so far
+            expired = attempt.valid_until is not None and (
+                await self._adapter.solid_time_ms()
+                > attempt.valid_until.timestamp() * 1000 + EXPIRY_MARGIN_MS
+            )
+            return Outcome("expired") if expired else Outcome("missing")
+        if (info.get("receipt") or {}).get("result") != (second.get("receipt") or {}).get("result"):
+            return Outcome("pending")
+        fee = int(info.get("fee") or 0)
+        ok = (info.get("receipt") or {}).get("result") == "SUCCESS" and self._adapter.transfer_in_info(
+            info, to=payout.recipient_address or "", amount=payout.amount
+        )
+        return Outcome("ok" if ok else "failed", fee)
+
+
+async def run_onchain_payouts(executor: OnchainPayouts, stop: asyncio.Event) -> None:
     log.info("evm_payouts_started", network=executor.network.value)
     while not stop.is_set():
         try:

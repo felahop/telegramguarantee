@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     signer_password: SecretStr = SecretStr("")
     signer_max_payout_usdt: Decimal = Decimal("5000")  # per transaction, enforced by the signer itself
     signer_daily_limit_usdt: Decimal = Decimal("20000")  # all networks, rolling 24 h
+    tron_fee_limit_trx: Decimal = Decimal("30")  # cap on TRX burnt by one USDT payout (energy)
 
     # Admin security: money actions of admins/arbitrators need a TOTP code (authenticator app).
     admin_totp_required: bool = True

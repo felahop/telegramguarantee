@@ -9,6 +9,8 @@ record-withdrawal <asset> <wallet> <amount> <ref>   the operator took money out 
                                                     users are owed
 reconcile                                           run reconciliation now; exit code 2 on critical findings
 resume-payouts <wallet>                             lift a payout pause (``cryptobot`` or an address)
+keystore-import <file.json>                         encrypt a hot-wallet private key into a keystore v3 file
+                                                    for the signer (key and password are read with getpass)
 
 Every command is written to ``admin_audit`` with admin_id 0. ``ref`` makes funding/withdrawal
 idempotent: running the same command twice books it once.
@@ -18,12 +20,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
+import json
 import sys
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 import sqlalchemy as sa
+from eth_account import Account
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import ChainsConfig, Settings, get_chains, get_settings
@@ -37,6 +43,7 @@ from app.services import ledger as postings
 from app.services.deals import utcnow
 from app.services.ledger import AccountCode, Ledger
 from app.services.reconciliation import balance_sources, decimals_for, reconcile, resume_payouts
+from app.signer.signer import tron_address
 
 Out = Callable[[str], None]
 _LIABILITIES = [
@@ -234,10 +241,34 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("reconcile")
     resume = sub.add_parser("resume-payouts")
     resume.add_argument("wallet")
+    keystore = sub.add_parser("keystore-import")
+    keystore.add_argument("path", help="where to write the encrypted keystore (inside SIGNER_KEYSTORE_DIR)")
     return parser
 
 
+def keystore_import(
+    path: str, *, read_secret: Callable[[str], str] = getpass.getpass, out: Out = _print
+) -> int:
+    """Never pass a private key on the command line: it would stay in the shell history."""
+    key = read_secret("Private key (hex): ").strip()
+    password = read_secret("Keystore password: ")
+    if password != read_secret("Repeat the password: ") or len(password) < 12:
+        out("refused: passwords differ or are shorter than 12 characters")
+        return 1
+    account = Account.from_key(key)
+    target = Path(path)
+    if target.exists():
+        out(f"refused: {target} exists")
+        return 1
+    target.write_text(json.dumps(Account.encrypt(account.key, password)))
+    target.chmod(0o600)
+    out(f"ok: {target} — EVM {account.address}, TRON {tron_address(account)}")
+    return 0
+
+
 async def _main(args: argparse.Namespace) -> int:
+    if args.command == "keystore-import":
+        return keystore_import(args.path)
     settings = get_settings()
     engine = create_engine(settings.database_url, pool_size=1)
     cryptopay = (

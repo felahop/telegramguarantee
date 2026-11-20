@@ -141,3 +141,28 @@ async def test_reconciliation_job_uses_the_context(cb: CB) -> None:
     assert [r.wallet for r in report.runs] == ["cryptobot"]
     no_provider = await reconciliation_job(cb.ctx)()  # cb.ctx has no live client: ledger checks only
     assert no_provider.runs == []
+
+
+def test_keystore_import_never_takes_the_key_as_an_argument(tmp_path: object) -> None:
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from eth_account import Account  # noqa: PLC0415
+
+    from app.cli import keystore_import  # noqa: PLC0415
+
+    target = Path(str(tmp_path)) / "hot.json"
+    answers = iter(["0x" + "4c" * 32, "long enough password", "long enough password"])
+    lines: list[str] = []
+    assert keystore_import(str(target), read_secret=lambda _: next(answers), out=lines.append) == 0
+    assert "4c4c4c" not in target.read_text()  # encrypted
+    key = Account.decrypt(json.loads(target.read_text()), "long enough password")
+    assert Account.from_key(key).address in lines[0]
+    assert oct(target.stat().st_mode)[-3:] == "600"
+    short = iter(["0x" + "4c" * 32, "short", "short"])
+    assert (
+        keystore_import(
+            str(Path(str(tmp_path)) / "b.json"), read_secret=lambda _: next(short), out=lines.append
+        )
+        == 1
+    )
