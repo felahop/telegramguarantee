@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from app.db.models import AdminAudit, IncomingTransfer, Payout, PayoutApproval, User
 from app.domain.enums import (
     DealStatus,
+    DisputeDecision,
     DisputeStatus,
     MatchMethod,
     MatchStatus,
@@ -230,3 +231,26 @@ async def test_ban_and_unban(cb: CB) -> None:
     async with cb.ctx.uow() as uow:
         user = await svc(cb, uow.session).set_ban(ADMIN, SELLER, banned=False)
         assert (user.is_banned, user.ban_reason) == (False, None)
+
+
+async def test_dispute_payout_needs_a_second_admin(cb: CB) -> None:
+    cb.ctx.settings = cb.ctx.settings.model_copy(update={"dispute_payout_requires_approval": True})
+    async with cb.ctx.sessionmaker() as s, s.begin():
+        await s.execute(sa.update(User).values(deals_completed=5))
+        s.add(User(id=910, first_name="second", role=UserRole.ADMIN))
+    deal_id, invoice_id = await awaiting(cb, amount="2500")
+    await cb.apply(cb.fake.pay(invoice_id))
+    async with cb.ctx.uow() as uow:
+        await uow.deals.open_dispute(BUYER, deal_id, "Не выполнено")
+    async with cb.ctx.uow() as uow:
+        await uow.deals.resolve_dispute(
+            ADMIN, deal_id, decision=DisputeDecision.BUYER, comment="возврат", keep_fee=False
+        )
+    [refund] = await cb.payouts(deal_id)
+    assert refund.status is PayoutStatus.AWAITING_APPROVAL
+    with pytest.raises(Forbidden, match="decided the dispute"):
+        async with cb.ctx.uow() as uow:
+            await svc(cb, uow.session).approve_payout(ADMIN, refund.id)
+    async with cb.ctx.uow() as uow:
+        approved = await svc(cb, uow.session).approve_payout(910, refund.id)
+    assert approved.status is PayoutStatus.QUEUED

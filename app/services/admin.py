@@ -341,6 +341,14 @@ class AdminService:
         deal = await self._s.get(Deal, payout.deal_id)
         if deal is not None and admin_id in (deal.buyer_id, deal.seller_id, deal.creator_id):
             raise Forbidden("an admin cannot approve a payout of their own deal")
+        decided_by = await self._s.scalar(
+            sa.select(Dispute.arbitrator_id).where(
+                Dispute.deal_id == payout.deal_id, Dispute.status == DisputeStatus.RESOLVED
+            )
+        )
+        if decided_by == admin_id:
+            # Four eyes: with DISPUTE_PAYOUT_REQUIRES_APPROVAL the approval must come from someone else.
+            raise Forbidden("the admin who decided the dispute cannot also approve its payouts")
 
     async def approve_payout(self, admin_id: int, payout_id: int) -> Payout:
         admin = await self.require(admin_id)
