@@ -184,6 +184,72 @@ class EvmAdapter:
         )
         return int(raw, 16)
 
+    # ── outgoing (used by the payout worker) ──────────────────────────────
+    async def chain_id(self) -> int:
+        return int(await self._primary.json_rpc("eth_chainId", []), 16)
+
+    async def nonce(self, address: str) -> int:
+        """Mined transaction count at both sources; the larger one (a lagging node must not make
+        us reuse a nonce)."""
+        a = int(await self._primary.json_rpc("eth_getTransactionCount", [address, "latest"]), 16)
+        b = int(await self._verifier.json_rpc("eth_getTransactionCount", [address, "latest"]), 16)
+        return max(a, b)
+
+    async def native_balance(self, address: str) -> int:
+        return int(await self._primary.json_rpc("eth_getBalance", [address, "latest"]), 16)
+
+    async def gas_price(self) -> int:
+        return int(await self._primary.json_rpc("eth_gasPrice", []), 16)
+
+    async def fee_caps(self) -> tuple[int, int]:
+        """EIP-1559 (max fee, priority fee): twice the base fee plus the tip covers several full blocks."""
+        block = await self._primary.json_rpc("eth_getBlockByNumber", ["latest", False])
+        base = int(block.get("baseFeePerGas") or "0x0", 16)
+        tip = int(await self._primary.json_rpc("eth_maxPriorityFeePerGas", []), 16)
+        return 2 * base + tip, tip
+
+    async def broadcast(self, raw: bytes) -> bool:
+        """Send to every endpoint of both pools; True if at least one accepted (or already had it)."""
+        accepted = False
+        for pool in (self._primary, self._verifier):
+            for endpoint in pool.endpoints:
+                try:
+                    await pool.json_rpc_at(endpoint, "eth_sendRawTransaction", ["0x" + raw.hex()])
+                    accepted = True
+                except RpcError as exc:
+                    text = exc.message.lower()
+                    if "already known" in text or "nonce too low" in text or "already imported" in text:
+                        accepted = True  # ours is in the pool or mined; the tracker finds out which
+                    else:
+                        log.warning(
+                            "evm_broadcast_rejected", network=self.network.value, error=exc.message[:120]
+                        )
+                except Exception as exc:
+                    log.warning("evm_broadcast_failed", network=self.network.value, error=type(exc).__name__)
+        return accepted
+
+    async def receipt(self, tx_hash: str, *, second_source: bool = False) -> dict[str, Any] | None:
+        pool = self._verifier if second_source else self._primary
+        result = await pool.json_rpc("eth_getTransactionReceipt", [tx_hash])
+        return result if isinstance(result, dict) else None
+
+    async def final_head(self, *, second_source: bool = False) -> int:
+        return (await self._head(self._verifier if second_source else self._primary)).final
+
+    def transfer_in_receipt(self, receipt: dict[str, Any], *, to: str, amount: int) -> bool:
+        """The USDT contract emitted Transfer(·, to, amount) in this receipt (USDT returns no bool)."""
+        for entry in receipt.get("logs") or []:
+            topics = entry.get("topics") or []
+            if (
+                str(entry.get("address", "")).lower() == self._contract.lower()
+                and len(topics) == 3
+                and str(topics[0]).lower() == TRANSFER_TOPIC
+                and topic_address(topics[2]).lower() == to.lower()
+                and int(entry.get("data") or "0x0", 16) == amount
+            ):
+                return True
+        return False
+
     async def close(self) -> None:
         await self._primary.close()
         await self._verifier.close()

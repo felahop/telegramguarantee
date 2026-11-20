@@ -131,6 +131,18 @@ class EndpointPool:
 
         return await self.run(op, prefer_method=method)
 
+    async def json_rpc_at(self, endpoint: RpcEndpoint, method: str, params: list[Any]) -> Any:
+        """One specific endpoint, no failover (broadcasting to every endpoint on purpose)."""
+        response = await self._clients[endpoint.name].post(
+            endpoint.url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        )
+        _raise_for_status(response)
+        body = response.json()
+        if body.get("error"):
+            err = body["error"]
+            raise RpcError(err.get("code"), str(err.get("message", err)))
+        return body.get("result")
+
     async def get(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
         async def op(client: httpx.AsyncClient, ep: RpcEndpoint) -> Any:
             response = await client.get(ep.url.rstrip("/") + path, params=params)

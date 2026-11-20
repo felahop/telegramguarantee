@@ -25,10 +25,13 @@ class HotWallet(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     network: Mapped[Network] = mapped_column(str_enum(Network, "network"))
-    address: Mapped[str] = mapped_column(unique=True)
+    address: Mapped[str]
     next_nonce: Mapped[int | None]
     next_seqno: Mapped[int | None]
     is_active: Mapped[bool] = mapped_column(server_default=sa.true())
+
+    # One EVM key is usually the hot wallet on BSC and on Ethereum: nonces are per network.
+    __table_args__ = (sa.UniqueConstraint("network", "address", name="uq_hot_wallets_network_address"),)
 
 
 class Payout(Base):

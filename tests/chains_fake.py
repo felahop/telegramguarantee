@@ -25,6 +25,12 @@ class FakeEvmNode:
     max_range: int | None = None
     failures: dict[str, list[int]] = field(default_factory=lambda: defaultdict(list))  # method → HTTP codes
     calls: list[tuple[str, list[Any]]] = field(default_factory=list)
+    chain_id: int = 56
+    native: dict[str, int] = field(default_factory=dict)
+    gas_price_wei: int = 3 * 10**9
+    sent_nonces: int = 0
+    mempool: Any = None
+    reject_broadcast: bool = False
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -45,8 +51,36 @@ class FakeEvmNode:
 
     def _eth_getBlockByNumber(self, p: list[Any]) -> dict[str, Any] | None:
         tag = p[0]
-        number = self.finalized if tag == "finalized" else int(tag, 16)
-        return {"number": hex(number), "hash": f"0xblock{number}"}
+        number = {"finalized": self.finalized, "latest": self.latest}.get(tag) or int(tag, 16)
+        return {"number": hex(number), "hash": f"0xblock{number}", "baseFeePerGas": hex(10**9)}
+
+    def _eth_chainId(self, p: list[Any]) -> str:
+        return hex(self.chain_id)
+
+    def _eth_getTransactionCount(self, p: list[Any]) -> str:
+        return hex(self.sent_nonces)
+
+    def _eth_getBalance(self, p: list[Any]) -> str:
+        return hex(self.native.get(p[0].lower(), 0))
+
+    def _eth_gasPrice(self, p: list[Any]) -> str:
+        return hex(self.gas_price_wei)
+
+    def _eth_maxPriorityFeePerGas(self, p: list[Any]) -> str:
+        return hex(10**9)
+
+    def _eth_sendRawTransaction(self, p: list[Any]) -> str:
+        from eth_utils import keccak  # noqa: PLC0415
+
+        if self.reject_broadcast:
+            raise _RpcFail("insufficient funds for gas * price + value")
+        raw = bytes.fromhex(p[0][2:])
+        tx_hash = "0x" + keccak(raw).hex()
+        if self.mempool is not None:
+            if tx_hash in self.mempool.pending or tx_hash in self.receipts:
+                raise _RpcFail("already known")
+            self.mempool.pending[tx_hash] = raw
+        return tx_hash
 
     def _eth_getLogs(self, p: list[Any]) -> list[dict[str, Any]]:
         f = p[0]
@@ -302,3 +336,59 @@ class FakeSolanaNode:
             },
         }
         self.signatures.setdefault(account, []).insert(0, {"signature": signature, "slot": slot, "err": err})
+
+
+@dataclass
+class EvmMempool:
+    """Transactions sent to fake EVM nodes; the test mines them into blocks on every node."""
+
+    nodes: list[FakeEvmNode]
+    contract: str
+    pending: dict[str, bytes] = field(default_factory=dict)
+    revert: set[str] = field(default_factory=set)  # recipients the token contract blacklists
+
+    def attach(self) -> None:
+        for node in self.nodes:
+            node.mempool = self  # type: ignore[attr-defined]
+
+    def mine(self, block: int) -> list[str]:
+        import rlp  # noqa: PLC0415
+        from eth_utils import keccak  # noqa: PLC0415
+
+        mined = []
+        for tx_hash, raw in list(self.pending.items()):
+            if raw[0] == 2:
+                fields = rlp.decode(raw[1:])
+                to, data, price = fields[5], fields[7], int.from_bytes(fields[3], "big")
+            else:
+                fields = rlp.decode(raw)
+                to, data, price = fields[3], fields[5], int.from_bytes(fields[1], "big")
+            assert "0x" + keccak(raw).hex() == tx_hash
+            recipient = "0x" + data[16:36].hex()
+            amount = int.from_bytes(data[36:68], "big")
+            status = "0x0" if recipient.lower() in self.revert else "0x1"
+            logs = []
+            if status == "0x1":
+                logs = [
+                    {
+                        "address": "0x" + to.hex(),
+                        "topics": [TRANSFER_TOPIC, pad_address("0x" + "11" * 20), pad_address(recipient)],
+                        "data": hex(amount),
+                        "logIndex": "0x0",
+                        "blockNumber": hex(block),
+                    }
+                ]
+            receipt = {
+                "status": status,
+                "blockNumber": hex(block),
+                "blockHash": f"0xblock{block}",
+                "gasUsed": hex(52_000),
+                "effectiveGasPrice": hex(price),
+                "logs": logs,
+            }
+            for node in self.nodes:
+                node.receipts[tx_hash] = receipt
+                node.sent_nonces += 1  # type: ignore[attr-defined]
+            mined.append(tx_hash)
+            del self.pending[tx_hash]
+        return mined

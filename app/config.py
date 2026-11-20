@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     dispute_payout_requires_approval: bool = False
     hot_wallet_limit_usdt: Decimal = Decimal("10000")
 
+    # On-chain signer: Ethereum keystore v3 JSON files (one per hot wallet, also used for TRON keys)
+    # in SIGNER_KEYSTORE_DIR, decrypted at start with SIGNER_PASSWORD (a Docker secret in prod).
+    signer_keystore_dir: str = ""
+    signer_password: SecretStr = SecretStr("")
+    signer_max_payout_usdt: Decimal = Decimal("5000")  # per transaction, enforced by the signer itself
+    signer_daily_limit_usdt: Decimal = Decimal("20000")  # all networks, rolling 24 h
+
     # Admin security: money actions of admins/arbitrators need a TOTP code (authenticator app).
     admin_totp_required: bool = True
     # Fernet key (base64, 32 bytes) encrypting TOTP secrets at rest. Generate with:
@@ -168,6 +175,7 @@ class NetworkConfig(BaseModel):
     min_payout_usdt: Decimal = Decimal("1")
     rpc: tuple[RpcEndpoint, ...] = ()
     verify_rpc: tuple[RpcEndpoint, ...] = ()  # independent second source for crediting
+    chain_id: int | None = None  # EVM: signed into every payout (56 BSC, 1 Ethereum, 97/11155111 testnets)
 
 
 class AssetSpec(BaseModel):
