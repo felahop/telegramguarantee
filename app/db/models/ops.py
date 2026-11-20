@@ -63,3 +63,20 @@ class ReconciliationRun(Base):
     diff: Mapped[int | None] = mapped_column(MinorAmount)
     ok: Mapped[bool]
     created_at: Mapped[datetime] = created_at_column()
+
+    __table_args__ = (sa.Index("ix_reconciliation_runs_wallet_created", "wallet", "asset", "created_at"),)
+
+
+class PayoutPause(Base):
+    """Circuit breaker: while a row exists, no payout leaves this wallet.
+
+    Set automatically when reconciliation finds unexplained missing money (a bug paying twice, a
+    leaked key) and by an admin by hand; lifting it needs an admin with TOTP or the operator CLI.
+    """
+
+    __tablename__ = "payout_pauses"
+
+    wallet: Mapped[str] = mapped_column(primary_key=True)  # "cryptobot" or a hot wallet address
+    reason: Mapped[str]
+    paused_by: Mapped[int | None]  # admin id; NULL = reconciliation
+    created_at: Mapped[datetime] = created_at_column()

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +32,8 @@ from app.db.models import (
     PaymentRequest,
     Payout,
     PayoutApproval,
+    PayoutPause,
+    ReconciliationRun,
     User,
 )
 from app.domain.enums import (
@@ -54,6 +57,7 @@ from app.services import notifications
 from app.services.deals import DealService, PaymentGateway, utcnow
 from app.services.ledger import AccountCode, AccountRef, Ledger
 from app.services.notifications import Notice
+from app.services.reconciliation import pause_payouts, resume_payouts
 
 ADMINS = frozenset({UserRole.ADMIN})
 ARBITERS = frozenset({UserRole.ADMIN, UserRole.ARBITRATOR})
@@ -68,6 +72,7 @@ class AdminCounts:
     approvals: int
     unidentified: int
     failed_payouts: int
+    paused_wallets: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -90,6 +95,12 @@ class BalanceRow:
 
     def get(self, code: AccountCode) -> int:
         return self.by_code.get(code.value, 0)
+
+
+@dataclass
+class ReconciliationStatus:
+    runs: list[ReconciliationRun]  # the latest run per wallet and asset
+    pauses: dict[str, PayoutPause]  # wallet → why its payouts are stopped
 
 
 @dataclass
@@ -170,6 +181,7 @@ class AdminService:
                 .select_from(Payout)
                 .where(Payout.status.in_([PayoutStatus.FAILED_RETRYABLE, PayoutStatus.FAILED_FINAL]))
             ),
+            paused_wallets=list((await self._s.execute(sa.select(PayoutPause.wallet))).scalars()),
         )
 
     # ── disputes ───────────────────────────────────────────────────────────
@@ -564,6 +576,39 @@ class AdminService:
                 row.custody[wallet or "?"] = value
             row.by_code[code] = row.by_code.get(code, 0) + value
         return list(result.values())
+
+    async def reconciliation_status(self) -> ReconciliationStatus:
+        latest = (
+            sa.select(ReconciliationRun)
+            .ext(distinct_on(ReconciliationRun.wallet, ReconciliationRun.asset))
+            .order_by(
+                ReconciliationRun.wallet,
+                ReconciliationRun.asset,
+                ReconciliationRun.created_at.desc(),
+                ReconciliationRun.id.desc(),
+            )
+        )
+        runs = list((await self._s.execute(latest)).scalars())
+        pauses = {p.wallet: p for p in (await self._s.execute(sa.select(PayoutPause))).scalars()}
+        return ReconciliationStatus(runs, pauses)
+
+    async def pause_payouts(self, admin_id: int, wallet: str, reason: str) -> bool:
+        """Stopping payouts is always safe, so it needs no TOTP; resuming does."""
+        admin = await self.require(admin_id)
+        created = await pause_payouts(self._s, wallet, reason=reason[:500], paused_by=admin.id)
+        self._audit(admin.id, "pause_payouts", "wallet", None, wallet=wallet, reason=reason[:300])
+        return created
+
+    async def resume_payouts(self, admin_id: int, wallet: str) -> PayoutPause:
+        admin = await self.require(admin_id)
+        pause = await resume_payouts(self._s, wallet)
+        if pause is None:
+            raise InvalidTransition("payouts are not paused", wallet=wallet)
+        self._audit(
+            admin.id, "resume_payouts", "wallet", None, wallet=wallet, paused_reason=pause.reason[:300]
+        )
+        await self._s.flush()
+        return pause
 
     async def search(self, query: str) -> SearchResult:
         q = query.strip()

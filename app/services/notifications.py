@@ -52,6 +52,7 @@ class Notice(StrEnum):
     ADMIN_PAYOUT_APPROVAL = "admin_payout_approval"
     ADMIN_PAYOUT_FAILED = "admin_payout_failed"
     ADMIN_PAYMENT_ANOMALY = "admin_payment_anomaly"
+    ADMIN_RECONCILIATION = "admin_reconciliation"  # balance mismatch, ledger invariant, stuck work
 
 
 ADMIN_NOTICES = frozenset(
@@ -61,6 +62,7 @@ ADMIN_NOTICES = frozenset(
         Notice.ADMIN_PAYOUT_APPROVAL,
         Notice.ADMIN_PAYOUT_FAILED,
         Notice.ADMIN_PAYMENT_ANOMALY,
+        Notice.ADMIN_RECONCILIATION,
     }
 )
 
@@ -74,9 +76,12 @@ async def enqueue(
     now: datetime,
     deal_id: int | None = None,
     payload: dict[str, Any] | None = None,
-) -> None:
-    """``now`` comes from the caller's clock (the sender compares against the same clock)."""
-    await session.execute(
+) -> bool:
+    """``now`` comes from the caller's clock (the sender compares against the same clock).
+
+    Returns False when a notice with this ``dedupe_key`` already exists (nothing was queued).
+    """
+    result = await session.execute(
         pg_insert(NotificationOutbox)
         .values(
             user_id=user_id,
@@ -89,6 +94,7 @@ async def enqueue(
         )
         .on_conflict_do_nothing(index_elements=[NotificationOutbox.dedupe_key])
     )
+    return bool(result.rowcount)  # type: ignore[attr-defined]
 
 
 async def admin_ids(session: AsyncSession) -> list[int]:

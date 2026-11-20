@@ -450,3 +450,8 @@ def network_fee_spent(*, native_asset: str, wallet: str, amount: int) -> list[Po
 def operator_funding(*, asset: str, wallet: str, amount: int) -> list[Posting]:
     """The operator tops up a wallet (gas coins, liquidity): recorded against equity."""
     return [debit(AccountRef.custody(asset, wallet), amount), credit(AccountRef.adjustments(asset), amount)]
+
+
+def operator_withdrawal(*, asset: str, wallet: str, amount: int) -> list[Posting]:
+    """The operator takes money out of a wallet (earned fees) or writes off a confirmed loss."""
+    return [debit(AccountRef.adjustments(asset), amount), credit(AccountRef.custody(asset, wallet), amount)]

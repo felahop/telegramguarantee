@@ -43,6 +43,9 @@ class AdmAct(StrEnum):
     BAN = "bn"
     UNBAN = "ub"
     CHAINS = "cn"
+    PAUSE = "ps"  # x = wallet
+    RESUME = "rs"  # x = wallet
+    RECONCILE = "rc"
     CANCEL = "x"
 
 
@@ -188,6 +191,19 @@ def user(u: User) -> InlineKeyboardMarkup:
 def deal_admin(deal: Deal, has_dispute: bool) -> InlineKeyboardMarkup:
     rows = [[_b("⚖️ Досье спора", AdmAct.DISPUTE, deal.id)]] if has_dispute else []
     return _m([*rows, back()])
+
+
+def balances(wallets: Sequence[str], paused: Sequence[str]) -> InlineKeyboardMarkup:
+    """Wallet ids go into callback data: CryptoBot now, hot wallets by a short id later."""
+    rows: list[list[InlineKeyboardButton]] = [[_b("🔄 Сверить сейчас", AdmAct.RECONCILE)]]
+    for wallet in wallets:
+        label = "CryptoBot" if wallet == "cryptobot" else wallet[:10]
+        if wallet in paused:
+            rows.append([_b(f"▶️ Возобновить выплаты · {label}", AdmAct.RESUME, x=wallet)])
+        else:
+            rows.append([_b(f"⏸ Остановить выплаты · {label}", AdmAct.PAUSE, x=wallet)])
+    rows.append(back())
+    return _m(rows)
 
 
 def cancel() -> InlineKeyboardMarkup:

@@ -11,8 +11,9 @@ from app.db.models import ChainCursor, Deal, DealEvent, DealMessage, IncomingTra
 from app.domain.enums import DisputeReason, PartyRole
 from app.domain.fees import Settlement
 from app.domain.money import format_amount
-from app.services.admin import AdminCounts, BalanceRow, DisputeDossier
+from app.services.admin import AdminCounts, BalanceRow, DisputeDossier, ReconciliationStatus
 from app.services.ledger import AccountCode
+from app.services.reconciliation import Report, Severity
 
 MESSAGE_LIMIT = 3900  # Telegram allows 4096; leave room for headers
 
@@ -46,13 +47,25 @@ REASON = {
 
 
 def render_menu(counts: AdminCounts) -> str:
+    paused = (
+        "⛔️ <b>Выплаты остановлены:</b> "
+        + ", ".join(esc(_wallet_name(w)) for w in counts.paused_wallets)
+        + " — см. «Балансы».\n\n"
+        if counts.paused_wallets
+        else ""
+    )
     return (
         "🛠 <b>Админ-панель</b>\n\n"
+        f"{paused}"
         f"⚖️ Открытые споры: <b>{counts.disputes}</b>\n"
         f"💸 Выплаты ждут подтверждения: <b>{counts.approvals}</b>\n"
         f"🚨 Проблемные выплаты: <b>{counts.failed_payouts}</b>\n"
         f"❓ Неопознанные платежи: <b>{counts.unidentified}</b>"
     )
+
+
+def _wallet_name(wallet: str) -> str:
+    return "CryptoBot" if wallet == "cryptobot" else wallet
 
 
 def _who(users: dict[int, User], user_id: int | None) -> str:
@@ -235,6 +248,50 @@ def render_balances(
             available, onhold = cryptobot["USDT"]
             lines.append(f"• CryptoBot API: доступно {esc(available)}, в холде {esc(onhold)}")
     return "\n".join(lines)
+
+
+def render_reconciliation(status: ReconciliationStatus, decimals_for: Callable[[str], int]) -> str:
+    lines = ["", "🧮 <b>Сверка</b>"]
+    if not status.runs:
+        lines.append("• ещё не проводилась")
+    for run in status.runs:
+        d = decimals_for(run.asset)
+        when = run.created_at.strftime("%d.%m %H:%M UTC")
+        if run.ok:
+            lines.append(f"• {esc(_wallet_name(run.wallet))}: ✅ совпадает ({when})")
+        else:
+            diff = run.diff or 0
+            sign = "излишек" if diff > 0 else "недостача"
+            flight = f", в пути {format_amount(run.in_flight, d)}" if run.in_flight else ""
+            lines.append(
+                f"• {esc(_wallet_name(run.wallet))}: ⚠️ {sign} {format_amount(abs(diff), d)}{flight} ({when})"
+            )
+    for wallet, pause in status.pauses.items():
+        who = "сверкой" if pause.paused_by is None else f"админом {pause.paused_by}"
+        lines.append(
+            f"⛔️ <b>Выплаты {esc(_wallet_name(wallet))} остановлены</b> {who} "
+            f"{pause.created_at.strftime('%d.%m %H:%M UTC')}: {esc(pause.reason[:300])}"
+        )
+    return "\n".join(lines)
+
+
+def render_reconcile_report(report: Report) -> str:
+    if report.skipped:
+        return "⏳ Сверка уже идёт в другом процессе — повторите через минуту."
+    lines = ["🧮 <b>Сверка выполнена</b>"]
+    if report.source_errors:
+        lines.append("⚠️ Не удалось получить баланс: " + ", ".join(esc(e) for e in report.source_errors))
+    if not report.findings:
+        lines.append("✅ Расхождений и зависших операций нет.")
+    for finding in report.findings[:15]:
+        icon = "🚨" if finding.severity is Severity.CRITICAL else "⚠️"
+        lines.append(f"{icon} {esc(finding.message)}")
+    if len(report.findings) > 15:
+        lines.append(f"… и ещё {len(report.findings) - 15}")
+    if report.paused:
+        lines.append("⛔️ Выплаты остановлены: " + ", ".join(esc(_wallet_name(w)) for w in report.paused))
+    text = "\n".join(lines)
+    return text if len(text) <= MESSAGE_LIMIT else text[: MESSAGE_LIMIT - 2] + "\n…"
 
 
 def render_chains(cursors: Sequence[ChainCursor]) -> str:

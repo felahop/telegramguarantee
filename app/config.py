@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     refund_objection_window: timedelta = timedelta(hours=12)
     tag_cooldown: timedelta = timedelta(hours=72)
     dispute_sla: timedelta = timedelta(hours=24)
+
+    # Background control (reconciliation and stuck-item checks)
+    reconcile_interval: timedelta = timedelta(minutes=15)
+    # A balance discrepancy alerts only if it was already there at least this long ago: a payment or
+    # a transfer between the two reads is not a discrepancy.
+    reconcile_confirm_after: timedelta = timedelta(minutes=5)
+    # Unexplained missing money stops payouts from that wallet until an admin resumes them.
+    reconcile_auto_pause: bool = True
+    worker_lag_alert: timedelta = timedelta(minutes=10)  # timers / payout queue / outbox not moving
+    stuck_payout_after: timedelta = timedelta(hours=1)
+    payout_approval_sla: timedelta = timedelta(hours=4)
+    unidentified_sla: timedelta = timedelta(hours=24)
+    refund_address_reminder_interval: timedelta = timedelta(hours=24)
     execution_hours_max: int = Field(24 * 30, ge=1)
 
     # Payout controls

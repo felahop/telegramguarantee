@@ -42,6 +42,9 @@ from app.services.notifications import Notice
 log = get_logger(__name__)
 
 CRYPTOBOT_WALLET = "cryptobot"
+# ``payouts.last_error`` prefix of a payout whose transfer may or may not have happened (the call
+# timed out and the lookup by spend_id failed too). Reconciliation treats such amounts as in flight.
+PAYOUT_OUTCOME_UNKNOWN = "lookup"
 LATE_PAYMENT_STATUSES = frozenset({DealStatus.EXPIRED, DealStatus.CANCELLED, DealStatus.REFUND_PENDING})
 
 

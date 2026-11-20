@@ -7,6 +7,7 @@ import hmac
 import itertools
 import json
 from collections import defaultdict
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -26,6 +27,8 @@ class FakeCryptoPay:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.errors: dict[str, list[str | Exception]] = defaultdict(list)  # method → queued failures
         self.timeout_after_transfer = False
+        self.balance_adjustment = Decimal(0)  # money that moved outside the bot (top-ups, theft)
+        self.onhold = Decimal(0)
         self._ids = itertools.count(9001)
 
     def transport(self) -> httpx.MockTransport:
@@ -111,7 +114,27 @@ class FakeCryptoPay:
         return [found] if found else []  # the docs: "returns array of Transfer"
 
     def _getBalance(self, p: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{"currency_code": "USDT", "available": "1000", "onhold": "0"}]
+        return [
+            {
+                "currency_code": "USDT",
+                "available": f"{self.app_balance() - self.onhold:f}",
+                "onhold": f"{self.onhold:f}",
+            },
+            {"currency_code": "TON", "available": "3.5", "onhold": "0"},  # other assets are ignored
+        ]
+
+    def app_balance(self) -> Decimal:
+        """The app's USDT: paid invoices net of the CryptoBot fee, minus transfers, plus adjustments."""
+        received = sum(
+            (
+                Decimal(str(i["paid_amount"])) - Decimal(str(i.get("fee_amount") or 0))
+                for i in self.invoices.values()
+                if i["status"] == "paid" and i.get("paid_asset", i["asset"]) == "USDT"
+            ),
+            Decimal(0),
+        )
+        sent = sum((Decimal(str(t["amount"])) for t in self.transfers.values()), Decimal(0))
+        return received - sent + self.balance_adjustment
 
     # ── test controls ───────────────────────────────────────────────────
     def pay(

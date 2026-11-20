@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.context import BotContext
-from app.db.models import Deal, PaymentRequest, Payout
+from app.db.models import Deal, PaymentRequest, Payout, PayoutPause
 from app.domain.enums import (
     BUYER_BOUND_PAYOUTS,
     Asset,
@@ -33,7 +33,7 @@ from app.services import notifications
 from app.services.deals import DealService
 from app.services.ledger import Ledger
 from app.services.notifications import Notice
-from app.services.payments import CRYPTOBOT_WALLET, PaymentService
+from app.services.payments import CRYPTOBOT_WALLET, PAYOUT_OUTCOME_UNKNOWN, PaymentService
 
 log = get_logger(__name__)
 
@@ -74,9 +74,11 @@ class CryptoBotPayouts:
         self._client = client
 
     async def run_once(self) -> bool:
-        """Execute one due CryptoBot payout. Returns False when nothing is due."""
+        """Execute one due CryptoBot payout. Returns False when nothing is due (or payouts are paused)."""
         now = self._ctx.clock()
         async with self._ctx.sessionmaker() as session, session.begin():
+            if await session.get(PayoutPause, CRYPTOBOT_WALLET) is not None:
+                return False
             payout = (
                 await session.execute(
                     sa.select(Payout)
@@ -136,7 +138,7 @@ class CryptoBotPayouts:
         try:
             found = await self._client.find_transfer(payout.idempotency_key)
         except (CryptoPayError, httpx.HTTPError) as exc:
-            self._fail(payout, now, "lookup", repr(exc), retry_in=_backoff(payout.attempts))
+            self._fail(payout, now, PAYOUT_OUTCOME_UNKNOWN, repr(exc), retry_in=_backoff(payout.attempts))
             return None
         if found is None:
             # Not executed: retrying with the same spend_id is safe.

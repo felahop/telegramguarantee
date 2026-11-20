@@ -142,7 +142,8 @@ HEADLINES: dict[Notice, Headline] = {
         f"↩️ <b>Деньги возвращаются покупателю</b>{': ' + _amount(d, p) if p.get('amount') else ''}."
     ),
     Notice.REFUND_ADDRESS_NEEDED: lambda d, u, p, us: (
-        f"📮 <b>Укажите адрес для возврата</b> в сети {T.NETWORK_SHORT[d.network]}. "
+        f"📮 <b>{'Напоминаем: укажите' if p.get('reminder') else 'Укажите'} адрес для возврата</b> "
+        f"в сети {T.NETWORK_SHORT[d.network]}. Деньги ждут вас. "
         "Не указывайте адрес биржи без проверки: возврат придёт на него без мемо."
     ),
     Notice.DEAL_REFUNDED: lambda d, u, p, us: "↩️ Возврат по сделке выполнен.",
@@ -175,7 +176,9 @@ ADMIN_HEADLINES: dict[Notice, str] = {
     Notice.ADMIN_PAYOUT_APPROVAL: "💸 Крупная выплата ждёт подтверждения",
     Notice.ADMIN_PAYOUT_FAILED: "🚨 Выплата не прошла",
     Notice.ADMIN_PAYMENT_ANOMALY: "🚨 Подозрительный платёж",
+    Notice.ADMIN_RECONCILIATION: "⚠️ Сверка: требует внимания",
 }
+RECONCILIATION_CRITICAL = "🚨 Сверка: критично"
 
 
 async def render_notice(
@@ -196,15 +199,21 @@ async def render_notice(
         return RenderedNotice(text=text, inline_message_id=str(payload["inline_message_id"]))
 
     if kind in ADMIN_NOTICES:
-        lines = [f"<b>{ADMIN_HEADLINES[kind]}</b>"]
+        headline = ADMIN_HEADLINES[kind]
+        if kind is Notice.ADMIN_RECONCILIATION and payload.get("severity") == "critical":
+            headline = RECONCILIATION_CRITICAL
+        lines = [f"<b>{headline}</b>"]
         if deal is not None:
             lines.append(
                 f"Сделка <code>{esc(deal.code)}</code> · {format_amount(deal.amount, deal.decimals)} USDT · "
                 f"{T.NETWORK_SHORT[deal.network]} · {T.STATUS[deal.status]}"
             )
-        details = {k: v for k, v in payload.items() if k not in ("status", "code")}
-        if details:
-            lines.append(esc(", ".join(f"{k}: {v}" for k, v in details.items())))
+        if kind is Notice.ADMIN_RECONCILIATION:
+            lines.append(esc(str(payload.get("message", ""))))
+        else:
+            details = {k: v for k, v in payload.items() if k not in ("status", "code")}
+            if details:
+                lines.append(esc(", ".join(f"{k}: {v}" for k, v in details.items())))
         return RenderedNotice(text="\n".join(lines), markup=_admin_button(kind, deal, payload))
 
     if deal is None:
@@ -222,11 +231,26 @@ def _admin_button(kind: Notice, deal: Deal | None, payload: dict[str, Any]) -> I
         target = AdmCb(a=AdmAct.DISPUTE, id=deal.id)
     elif kind is Notice.ADMIN_PAYMENT_ANOMALY:
         target = AdmCb(a=AdmAct.UNIDENTIFIED)
+    elif kind is Notice.ADMIN_RECONCILIATION:
+        target = _reconciliation_target(payload, deal)
     else:
         target = AdmCb(a=AdmAct.MENU)
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🛠 Открыть в админке", callback_data=target.pack())]]
     )
+
+
+def _reconciliation_target(payload: dict[str, Any], deal: Deal | None) -> AdmCb:
+    check = str(payload.get("check", ""))
+    if payload.get("payout_id"):
+        return AdmCb(a=AdmAct.PAYOUT, id=int(payload["payout_id"]))
+    if check == "unidentified":
+        return AdmCb(a=AdmAct.UNIDENTIFIED)
+    if deal is not None:
+        return AdmCb(a=AdmAct.DEAL, id=deal.id)
+    if check in ("balance", "solvency") or check.startswith("ledger"):
+        return AdmCb(a=AdmAct.BALANCES)
+    return AdmCb(a=AdmAct.MENU)
 
 
 def _mentioned(payload: dict[str, Any]) -> list[int]:

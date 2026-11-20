@@ -28,6 +28,8 @@ from app.bot.admin_render import (
     render_dossier,
     render_menu,
     render_payout,
+    render_reconcile_report,
+    render_reconciliation,
     render_resolution_preview,
     render_transfer,
     render_user,
@@ -41,6 +43,8 @@ from app.domain.errors import DomainError, NotFound
 from app.domain.money import NATIVE_DECIMALS
 from app.logging import get_logger
 from app.services.admin import ADMINS, ARBITERS, AdminService
+from app.services.payments import CRYPTOBOT_WALLET
+from app.services.reconciliation import balance_sources, reconcile
 from app.services.totp import TotpError, TotpService
 from app.services.users import find_by_username
 
@@ -256,6 +260,9 @@ async def _run_op(ctx: BotContext, admin_id: int, op: str, params: dict[str, Any
                     recipient_address=params.get("address"),
                 )
                 return f"↩️ Возврат поставлен в очередь (выплата #{payout.id})."
+            if op == "resume":
+                pause = await svc.resume_payouts(admin_id, params["wallet"])
+                return f"▶️ Выплаты с кошелька {esc(pause.wallet)} возобновлены."
     except DomainError as exc:
         return f"⚠️ {T.error_text(exc)}"
     raise ValueError(f"unknown admin op {op!r}")
@@ -666,9 +673,11 @@ async def on_return_recipient(
 # ── overview, search, users ──────────────────────────────────────────────────
 
 
-async def on_balances(callback: CallbackQuery, ctx: BotContext) -> None:
+async def _balances_view(ctx: BotContext) -> tuple[str, InlineKeyboardMarkup]:
     async with ctx.uow() as uow:
-        rows = await _svc(ctx, uow.session).balances()
+        svc = _svc(ctx, uow.session)
+        rows = await svc.balances()
+        status = await svc.reconciliation_status()
     live: dict[str, tuple[str, str]] | None = None
     if ctx.cryptopay is not None:
         try:
@@ -678,7 +687,63 @@ async def on_balances(callback: CallbackQuery, ctx: BotContext) -> None:
             }
         except Exception as exc:  # the panel must open even when the provider is down
             log.warning("admin_balance_fetch_failed", error=repr(exc))
-    await _show(callback, render_balances(rows, live, _decimals_for(ctx)), AK.only_back())
+    decimals = _decimals_for(ctx)
+    text = render_balances(rows, live, decimals) + "\n" + render_reconciliation(status, decimals)
+    wallets = {r.wallet for r in status.runs} | set(status.pauses)
+    if ctx.cryptopay is not None:
+        wallets.add(CRYPTOBOT_WALLET)
+    return text, AK.balances(sorted(wallets), list(status.pauses))
+
+
+async def on_balances(callback: CallbackQuery, ctx: BotContext) -> None:
+    await _show(callback, *await _balances_view(ctx))
+
+
+async def on_pause(callback: CallbackQuery, callback_data: AdmCb, ctx: BotContext, user: User) -> None:
+    """Stopping payouts is immediate and needs no TOTP: it can only make things safer."""
+    async with ctx.uow() as uow:
+        created = await _svc(ctx, uow.session).pause_payouts(
+            user.id, callback_data.x, f"остановлено вручную админом {user.id}"
+        )
+    log.warning("admin_paused_payouts", admin_id=user.id, wallet=callback_data.x)
+    await callback.answer(
+        "⏸ Выплаты остановлены." if created else "Выплаты уже остановлены.", show_alert=True
+    )
+    text, markup = await _balances_view(ctx)
+    if isinstance(callback.message, Message):
+        try:
+            await callback.message.edit_text(text, reply_markup=markup)
+        except TelegramBadRequest as exc:
+            log.info("admin_balances_not_edited", error=str(exc))
+
+
+async def on_resume(
+    callback: CallbackQuery, callback_data: AdmCb, ctx: BotContext, user: User, state: FSMContext, bot: Bot
+) -> None:
+    await callback.answer()
+    await _gate(
+        bot,
+        user.id,
+        ctx,
+        user,
+        state,
+        "resume",
+        {"wallet": callback_data.x},
+        f"Возобновить выплаты с кошелька {esc(callback_data.x)}. Если недостача не устранена "
+        "(пополнение записано командой record-funding), следующая сверка снова их остановит.",
+    )
+
+
+async def on_reconcile(callback: CallbackQuery, ctx: BotContext) -> None:
+    await callback.answer("Сверяю…")
+    report = await reconcile(
+        ctx.sessionmaker,
+        ctx.settings,
+        ctx.chains,
+        sources=balance_sources(ctx.chains, ctx.cryptopay),
+        now=ctx.clock(),
+    )
+    await _send(callback, render_reconcile_report(report), reply_markup=AK.only_back())
 
 
 async def on_chains(callback: CallbackQuery, ctx: BotContext) -> None:
@@ -814,6 +879,9 @@ def build_router() -> Router:
     cb(on_assign, AdmCb.filter(F.a == AdmAct.ASSIGN), admins)
     cb(on_return, AdmCb.filter(F.a == AdmAct.RETURN), admins)
     cb(on_balances, AdmCb.filter(F.a == AdmAct.BALANCES), admins)
+    cb(on_pause, AdmCb.filter(F.a == AdmAct.PAUSE), admins)
+    cb(on_resume, AdmCb.filter(F.a == AdmAct.RESUME), admins)
+    cb(on_reconcile, AdmCb.filter(F.a == AdmAct.RECONCILE), admins)
     cb(on_chains, AdmCb.filter(F.a == AdmAct.CHAINS), admins)
     cb(on_search, AdmCb.filter(F.a == AdmAct.SEARCH), admins)
     cb(on_deal, AdmCb.filter(F.a == AdmAct.DEAL), staff)
