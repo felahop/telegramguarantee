@@ -56,7 +56,7 @@ async def run_periodic(
 
 
 def reconciliation_job(ctx: BotContext) -> Callable[[], Awaitable[Report]]:
-    sources = balance_sources(ctx.chains, ctx.cryptopay)
+    sources = balance_sources(ctx.chains, ctx.cryptopay, ctx.chain_adapters.values())
 
     async def job() -> Report:
         return await reconcile(ctx.sessionmaker, ctx.settings, ctx.chains, sources=sources, now=ctx.clock())

@@ -255,3 +255,50 @@ async def test_tags_are_unique_per_address_and_amount(oc: OC) -> None:
     async with oc.ctx.sessionmaker() as s:
         statuses = list((await s.execute(sa.select(PaymentRequest.status))).scalars())
     assert statuses.count(PaymentRequestStatus.ACTIVE) == 2
+
+
+# ── reconciliation of deposit addresses ──────────────────────────────────────
+
+
+async def test_deposit_address_balance_is_reconciled(oc: OC) -> None:
+    from app.services.reconciliation import Severity, balance_sources, reconcile  # noqa: PLC0415
+
+    chain = oc.adapters[TRON]
+    await oc.tick()
+    _, request = await oc.awaiting()
+    chain.send("tx1", request.expected_amount, at=105)
+    chain.latest = chain.final = 110
+    await oc.tick()
+
+    async def run() -> list[tuple[str, Severity]]:
+        report = await reconcile(
+            oc.ctx.sessionmaker,
+            oc.ctx.settings,
+            oc.ctx.chains,
+            sources=balance_sources(oc.ctx.chains, None, [chain]),  # type: ignore[list-item]
+            now=oc.clock(),
+        )
+        assert [r.wallet for r in report.runs] == [chain.address]
+        return [(f.check, f.severity) for f in report.findings if f.check in ("balance", "chain_watcher")]
+
+    assert await run() == []
+    chain.transfers.clear()  # the money left the deposit address outside the bot
+    await run()
+    oc.clock.advance(timedelta(minutes=15))
+    assert ("balance", Severity.CRITICAL) in await run()
+
+
+async def test_stalled_watcher_is_critical(oc: OC) -> None:
+    from app.services.reconciliation import reconcile  # noqa: PLC0415
+
+    await oc.tick()
+    async with oc.ctx.sessionmaker() as s, s.begin():
+        await s.execute(
+            sa.update(ChainCursor).values(
+                updated_at=sa.func.now() - timedelta(minutes=30), last_error="HTTP 429"
+            )
+        )
+    report = await reconcile(oc.ctx.sessionmaker, oc.ctx.settings, oc.ctx.chains, sources=[], now=oc.clock())
+    [finding] = [f for f in report.findings if f.check == "chain_watcher"]
+    assert "tron" in finding.message
+    assert "HTTP 429" in finding.message

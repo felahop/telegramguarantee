@@ -740,7 +740,7 @@ async def on_reconcile(callback: CallbackQuery, ctx: BotContext) -> None:
         ctx.sessionmaker,
         ctx.settings,
         ctx.chains,
-        sources=balance_sources(ctx.chains, ctx.cryptopay),
+        sources=balance_sources(ctx.chains, ctx.cryptopay, ctx.chain_adapters.values()),
         now=ctx.clock(),
     )
     await _send(callback, render_reconcile_report(report), reply_markup=AK.only_back())

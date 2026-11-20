@@ -200,6 +200,12 @@ class ChainsConfig(BaseModel):
                     raise ValueError(f"{network}: token contract is required (whitelist)")
                 if cfg.finality is None:
                     raise ValueError(f"{network}: finality rule is required")
+                if not cfg.rpc or not cfg.verify_rpc:
+                    raise ValueError(f"{network}: rpc and an independent verify_rpc are required")
+                if {e.url for e in cfg.rpc} & {e.url for e in cfg.verify_rpc}:
+                    raise ValueError(f"{network}: verify_rpc must be a different provider than rpc")
+                if not cfg.deposit_address:
+                    raise ValueError(f"{network}: deposit_address is required")
         return self
 
     def enabled_networks(self) -> list[Network]:

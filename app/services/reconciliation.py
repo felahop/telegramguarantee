@@ -24,7 +24,7 @@ incoming transfers) are compared with the application clock; columns defaulted b
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
@@ -35,8 +35,10 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.chains.base import ChainAdapter
 from app.config import ChainsConfig, Settings
 from app.db.models import (
+    ChainCursor,
     Deal,
     HotWallet,
     IncomingTransfer,
@@ -57,6 +59,7 @@ from app.domain.enums import (
     PaymentRequestStatus,
     PayoutKind,
     PayoutStatus,
+    Provider,
 )
 from app.domain.money import NATIVE_DECIMALS, asset_code, format_amount
 from app.logging import get_logger
@@ -128,13 +131,33 @@ class CryptoBotBalances:
         return [ObservedBalance(asset_code(Asset.USDT, Network.CRYPTOBOT), CRYPTOBOT_WALLET, amount)]
 
 
-def balance_sources(chains: ChainsConfig, cryptopay: CryptoPayClient | None) -> list[BalanceSource]:
-    """Every wallet we can read a real balance of (on-chain sources join with ChainWatcher)."""
+class OnchainBalances:
+    """USDT on our deposit addresses at the final head, read through the network's adapter."""
+
+    def __init__(self, adapter: ChainAdapter) -> None:
+        self._adapter = adapter
+        self.name = adapter.network.value
+
+    async def balances(self) -> list[ObservedBalance]:
+        asset = asset_code(Asset.USDT, self._adapter.network)
+        return [
+            ObservedBalance(asset, address, await self._adapter.token_balance(address))
+            for address in self._adapter.addresses
+        ]
+
+
+def balance_sources(
+    chains: ChainsConfig,
+    cryptopay: CryptoPayClient | None,
+    adapters: Iterable[ChainAdapter] = (),
+) -> list[BalanceSource]:
+    """Every wallet we can read a real balance of: the CryptoBot app and our deposit addresses."""
     sources: list[BalanceSource] = []
     if cryptopay is not None:
         sources.append(
             CryptoBotBalances(cryptopay, chains.spec(Network.CRYPTOBOT, include_disabled=True).decimals)
         )
+    sources += [OnchainBalances(adapter) for adapter in adapters]
     return sources
 
 
@@ -461,7 +484,31 @@ class Reconciler:
         findings += await self._old_unidentified()
         findings += await self._timers_lag()
         findings += await self._outbox_lag()
+        findings += await self._watchers_lag()
         return findings
+
+    async def _watchers_lag(self) -> list[Finding]:
+        """A watcher that stopped advancing means payments are not being credited."""
+        db_now = self._db_clock()
+        enabled = [n for n in self._chains.enabled_networks() if n.provider is not Provider.CRYPTOBOT]
+        if not enabled:
+            return []
+        rows = await self._s.execute(
+            sa.select(ChainCursor).where(
+                ChainCursor.network.in_(enabled),
+                ChainCursor.updated_at < db_now - self._settings.worker_lag_alert,
+            )
+        )
+        return [
+            Finding(
+                "chain_watcher",
+                Severity.CRITICAL,
+                f"Наблюдатель сети {c.network.value} не продвигается {_age(db_now - c.updated_at)}: оплаты в "
+                f"этой сети не зачисляются. Последняя ошибка: {(c.last_error or '—')[:200]}",
+                key=f"chain_watcher:{c.network.value}:{c.cursor_final}",
+            )
+            for c in rows.scalars()
+        ]
 
     async def _payout_queue_lag(self) -> list[Finding]:
         paused = set((await self._s.execute(sa.select(PayoutPause.wallet))).scalars())
